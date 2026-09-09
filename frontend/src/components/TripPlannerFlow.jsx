@@ -1,0 +1,1103 @@
+import React, { useState, useMemo, useEffect } from "react";
+import { useTrip } from "../context/TripContext.jsx";
+import { computeHotelLocationScores } from "../utils/locationScore.js";
+
+const CAB_TYPES = [
+  { id: "auto", name: "Auto Rickshaw", icon: "🛺", ratePerKm: 16, baseFare: 35 },
+  { id: "sedan", name: "Sedan / Mini", icon: "🚗", ratePerKm: 22, baseFare: 70 },
+  { id: "suv", name: "SUV / Prime", icon: "🚙", ratePerKm: 32, baseFare: 120 },
+];
+
+const HOTEL_PRICE_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "budget", label: "Budget (< ₹2,500)", max: 2500 },
+  { id: "moderate", label: "Moderate (₹2,500–₹4,500)", min: 2500, max: 4500 },
+  { id: "luxury", label: "Luxury (> ₹4,500)", min: 4500 },
+];
+
+const SIGHT_CATEGORY_FILTERS = [
+  { id: "all", label: "All Sights" },
+  { id: "temple", label: "Temples", match: ["Place of Worship", "Temple"] },
+  { id: "beach", label: "Beaches", match: ["Beach", "Coast"] },
+  { id: "museum", label: "Museums", match: ["Museum", "Art & Culture", "Gallery"] },
+  { id: "monument", label: "Monuments", match: ["Monuments & Landmarks", "Monument"] },
+  { id: "heritage", label: "Heritage", match: ["Heritage & Historic Site", "Fort & Palace", "Castle"] },
+  { id: "nature", label: "Nature & Views", match: ["Nature", "Park", "Viewpoint", "Waterfall"] },
+];
+
+export default function TripPlannerFlow({
+  destination,
+  attractions = [],
+  hotels = [],
+  transportHubs = [],
+  onExitPlanning,
+  onFocusMap,
+  showAddMorePlaces,
+  setShowAddMorePlaces,
+  isChangingHotel,
+  setIsChangingHotel,
+}) {
+  const {
+    trip,
+    setDurationDays,
+    addAttraction,
+    removeAttraction,
+    toggleAttraction,
+    selectAllAttractions,
+    clearAttractions,
+    selectHotel,
+    selectArrivalHub,
+    selectCab,
+    updateTickets,
+    setCurrentPlanStep,
+    setIsPlanning,
+  } = useTrip();
+
+  const step = trip.currentPlanStep || 1;
+
+  // Local state fallbacks if not controlled by parent
+  const [localShowAddMorePlaces, setLocalShowAddMorePlaces] = useState(false);
+  const [localIsChangingHotel, setLocalIsChangingHotel] = useState(false);
+
+  const activeShowAddMorePlaces = showAddMorePlaces !== undefined ? showAddMorePlaces : localShowAddMorePlaces;
+  const setActiveShowAddMorePlaces = setShowAddMorePlaces || setLocalShowAddMorePlaces;
+
+  const activeIsChangingHotel = isChangingHotel !== undefined ? isChangingHotel : localIsChangingHotel;
+  const setActiveIsChangingHotel = setIsChangingHotel || setLocalIsChangingHotel;
+
+  // Local state for Step 1 sights category filter
+  const [placesCategoryFilter, setPlacesCategoryFilter] = useState("all");
+
+  // Local state for Step 2 hotel price filter
+  const [hotelFilter, setHotelFilter] = useState("all");
+
+  // Local state for Step 3 cab choice
+  const [chosenCabId, setChosenCabId] = useState(trip.selectedCab?.id || "sedan");
+  const [cabConfirmed, setCabConfirmed] = useState(!!trip.selectedCab);
+
+  // Local state for Step 4 tickets
+  // Format: { [attractionKey]: { selected: boolean, visitors: number, price: number, name: string } }
+  const [ticketsState, setTicketsState] = useState(() => {
+    const initial = {};
+    trip.selectedAttractions.forEach((a, idx) => {
+      const key = a._id || a.osmId || a.name;
+      const isFree =
+        a.category === "Place of Worship" ||
+        a.category === "Beach" ||
+        a.category === "Park & Nature" ||
+        a.category === "Nature & Scenic Spot";
+      const price = isFree ? 0 : 50 + (idx % 4) * 50;
+      initial[key] = {
+        selected: true,
+        visitors: trip.tickets[key]?.qty || 2,
+        price,
+        name: a.name,
+      };
+    });
+    return initial;
+  });
+
+  // Keep ticketsState synced when trip.selectedAttractions changes
+  useEffect(() => {
+    setTicketsState((prev) => {
+      const updated = { ...prev };
+      trip.selectedAttractions.forEach((a, idx) => {
+        const key = a._id || a.osmId || a.name;
+        if (!updated[key]) {
+          const isFree =
+            a.category === "Place of Worship" ||
+            a.category === "Beach" ||
+            a.category === "Park & Nature" ||
+            a.category === "Nature & Scenic Spot";
+          const price = isFree ? 0 : 50 + (idx % 4) * 50;
+          updated[key] = {
+            selected: true,
+            visitors: trip.tickets[key]?.qty || 2,
+            price,
+            name: a.name,
+          };
+        }
+      });
+      return updated;
+    });
+  }, [trip.selectedAttractions, trip.tickets]);
+
+  const cityName = destination.displayName.split(",")[0].trim();
+
+  // ─── Multi-Select Places Logic for Step 1 ──────────────────────────────────
+  const selectedKeys = useMemo(() => {
+    return new Set(trip.selectedAttractions.map((a) => a._id || a.osmId || a.name));
+  }, [trip.selectedAttractions]);
+
+  // Sights not yet added to the trip
+  const remainingAttractions = useMemo(() => {
+    return attractions.filter((a) => !selectedKeys.has(a._id || a.osmId || a.name));
+  }, [attractions, selectedKeys]);
+
+  const filteredStep1Attractions = useMemo(() => {
+    if (placesCategoryFilter === "all") return attractions;
+    const filter = SIGHT_CATEGORY_FILTERS.find((f) => f.id === placesCategoryFilter);
+    if (!filter || !filter.match) return attractions;
+
+    return attractions.filter((a) => {
+      const cat = a.category || "";
+      return filter.match.some((m) => cat.toLowerCase().includes(m.toLowerCase()));
+    });
+  }, [attractions, placesCategoryFilter]);
+
+  function handleSelectTop5() {
+    // Select top 5 attractions (or all if fewer than 5)
+    const top5 = attractions.slice(0, 5);
+    selectAllAttractions(top5);
+  }
+
+  function handleSelectAll() {
+    selectAllAttractions(attractions);
+  }
+
+  function handleClearAll() {
+    clearAttractions();
+  }
+
+  function handleToggleAttraction(attraction) {
+    toggleAttraction(attraction);
+  }
+
+  // ─── Location Scored Hotels for Step 2 ──────────────────────────────────────
+  const scoredHotels = useMemo(() => {
+    return computeHotelLocationScores(hotels, trip.selectedAttractions, trip.arrivalHub);
+  }, [hotels, trip.selectedAttractions, trip.arrivalHub]);
+
+  const filteredHotels = useMemo(() => {
+    return scoredHotels.filter((h) => {
+      const p = h.pricePerNight || 0;
+      if (hotelFilter === "budget") return p < 2500;
+      if (hotelFilter === "moderate") return p >= 2500 && p <= 4500;
+      if (hotelFilter === "luxury") return p > 4500;
+      return true;
+    });
+  }, [scoredHotels, hotelFilter]);
+
+  // Ensure default arrival hub if none chosen
+  const activeArrivalHub = useMemo(() => {
+    if (trip.arrivalHub) return trip.arrivalHub;
+    const railway = transportHubs.find((h) => h.type === "Railway Station");
+    if (railway) return railway;
+    const airport = transportHubs.find((h) => h.type === "Airport");
+    if (airport) return airport;
+    const bus = transportHubs.find((h) => h.type === "Bus Station" || h.type === "Bus Stop");
+    if (bus) return bus;
+    return {
+      name: `${cityName} City Center Entry`,
+      type: "Arrival Terminal",
+      lat: destination.lat,
+      lon: destination.lon,
+    };
+  }, [trip.arrivalHub, transportHubs, cityName, destination]);
+
+  // Distance from arrival hub to selected hotel
+  const transitDistanceKm = useMemo(() => {
+    if (!trip.selectedHotel) return 3.5;
+    return trip.selectedHotel.distToArrival || 3.5;
+  }, [trip.selectedHotel]);
+
+  function calculateFare(cab) {
+    return Math.round(cab.baseFare + transitDistanceKm * cab.ratePerKm);
+  }
+
+  // ─── Step 4 Tickets calculations ───────────────────────────────────────────
+  function handleTicketVisitorChange(key, delta) {
+    setTicketsState((prev) => {
+      const curr = prev[key];
+      if (!curr) return prev;
+      const nextVisitors = Math.max(1, curr.visitors + delta);
+      return { ...prev, [key]: { ...curr, visitors: nextVisitors } };
+    });
+  }
+
+  function handleTicketToggle(key) {
+    setTicketsState((prev) => {
+      const curr = prev[key];
+      if (!curr) return prev;
+      return { ...prev, [key]: { ...curr, selected: !curr.selected } };
+    });
+  }
+
+  const ticketTotal = useMemo(() => {
+    return Object.values(ticketsState).reduce((sum, item) => {
+      if (!item.selected || item.price === 0) return sum;
+      return sum + item.price * item.visitors;
+    }, 0);
+  }, [ticketsState]);
+
+  // ─── Step Transitions ──────────────────────────────────────────────────────
+  function goToStep(s) {
+    if (s !== 2) {
+      setActiveShowAddMorePlaces(false);
+      setActiveIsChangingHotel(false);
+    }
+    setCurrentPlanStep(s);
+  }
+
+  function handleConfirmCab() {
+    const cabObj = CAB_TYPES.find((c) => c.id === chosenCabId) || CAB_TYPES[1];
+    const fare = calculateFare(cabObj);
+    selectCab({
+      ...cabObj,
+      fare,
+      distanceKm: transitDistanceKm,
+    });
+    setCabConfirmed(true);
+  }
+
+  function handleConfirmTickets() {
+    const formatted = {};
+    Object.entries(ticketsState).forEach(([k, v]) => {
+      if (v.selected) {
+        formatted[k] = { qty: v.visitors, price: v.price, name: v.name };
+      }
+    });
+    updateTickets(formatted);
+    goToStep(5);
+  }
+
+  function handleSkipTickets() {
+    updateTickets({});
+    goToStep(5);
+  }
+
+  // ─── Calculations for Step 5 Summary ───────────────────────────────────────
+  const duration = trip.durationDays || 3;
+  const hotelNightsCost = (trip.selectedHotel?.pricePerNight || 3000) * duration;
+  const cabCost = trip.selectedCab?.fare || (cabConfirmed ? calculateFare(CAB_TYPES.find((c) => c.id === chosenCabId)) : 0);
+  const totalCost = hotelNightsCost + cabCost + ticketTotal;
+
+  // Distribute places across days for Step 5
+  const daySchedules = useMemo(() => {
+    const days = [];
+    for (let i = 1; i <= duration; i++) days.push([]);
+    trip.selectedAttractions.forEach((a, idx) => {
+      const dayIndex = idx % duration;
+      days[dayIndex].push(a);
+    });
+    return days;
+  }, [trip.selectedAttractions, duration]);
+
+  return (
+    <div className="trip-planner-progressive-shell">
+      {/* Top Stepper Indicator */}
+      <div className="planner-stepper-header">
+        <div className="stepper-title-row">
+          <span className="step-indicator-pill">Step {step} of 5</span>
+          <button
+            type="button"
+            className="planner-exit-btn"
+            onClick={onExitPlanning}
+            title="Exit trip planner to open map"
+          >
+            ✕ Exit Planner
+          </button>
+        </div>
+
+        <div className="progressive-step-breadcrumbs">
+          {[
+            { s: 1, label: "1. Places" },
+            { s: 2, label: "2. Hotel" },
+            { s: 3, label: "3. Transport" },
+            { s: 4, label: "4. Tickets" },
+            { s: 5, label: "5. Trip" },
+          ].map((item) => (
+            <button
+              key={item.s}
+              type="button"
+              className={`breadcrumb-step ${step === item.s ? "active" : ""} ${
+                step > item.s ? "completed" : ""
+              }`}
+              onClick={() => {
+                // Only allow navigating backwards or to next available step
+                if (item.s <= step || (item.s === 2 && trip.selectedAttractions.length > 0)) {
+                  goToStep(item.s);
+                }
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* STEP 1: MULTI-SELECT PLACES                                               */}
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {step === 1 && (
+        <div className="planner-step-body">
+          <div className="step-heading-block">
+            <h3>Select Places to Visit (Multi-Select)</h3>
+            <p className="step-instruction">
+              Choose the sights you want to explore in {cityName}. Select multiple options below, then proceed to choose your hotel!
+            </p>
+          </div>
+
+          <div className="duration-setter-row">
+            <label htmlFor="trip-days">Trip Duration:</label>
+            <select
+              id="trip-days"
+              value={trip.durationDays}
+              onChange={(e) => setDurationDays(Number(e.target.value))}
+              className="duration-select"
+            >
+              <option value={1}>1 Day</option>
+              <option value={2}>2 Days</option>
+              <option value={3}>3 Days (Recommended)</option>
+              <option value={4}>4 Days</option>
+              <option value={5}>5 Days</option>
+              <option value={7}>7 Days (Full Week)</option>
+            </select>
+          </div>
+
+          {/* Multi-Select Toolbar & Batch Controls */}
+          <div className="multi-select-toolbar">
+            <div className="selected-badge-count">
+              <span>Selected:</span>
+              <strong>{trip.selectedAttractions.length}</strong> of {attractions.length} sights
+            </div>
+
+            <div className="batch-action-buttons">
+              <button
+                type="button"
+                className="batch-btn top5"
+                onClick={handleSelectTop5}
+                title="Select top 5 iconic sights"
+              >
+                ⭐ Top 5
+              </button>
+              <button
+                type="button"
+                className="batch-btn select-all"
+                onClick={handleSelectAll}
+                title="Select all sights"
+              >
+                ✓ Select All
+              </button>
+              <button
+                type="button"
+                className="batch-btn clear"
+                onClick={handleClearAll}
+                disabled={trip.selectedAttractions.length === 0}
+                title="Deselect all sights"
+              >
+                ✕ Clear
+              </button>
+            </div>
+          </div>
+
+          {/* Selected Sights Pills Strip */}
+          {trip.selectedAttractions.length > 0 && (
+            <div className="selected-sights-summary-bar">
+              <span className="summary-bar-label">In Itinerary ({trip.selectedAttractions.length}):</span>
+              <div className="selected-chips-scroll">
+                {trip.selectedAttractions.map((a) => {
+                  const key = a._id || a.osmId || a.name;
+                  return (
+                    <span key={key} className="selected-sight-chip">
+                      {a.name}
+                      <button
+                        type="button"
+                        className="chip-remove-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeAttraction(key);
+                        }}
+                        title={`Remove ${a.name}`}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Category Filter Chips */}
+          <div className="category-filter-chips step1-categories">
+            {SIGHT_CATEGORY_FILTERS.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                className={`filter-chip ${placesCategoryFilter === cat.id ? "active" : ""}`}
+                onClick={() => setPlacesCategoryFilter(cat.id)}
+              >
+                {cat.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Multi-Select Sights Checklist */}
+          <div className="sights-multi-select-list">
+            {filteredStep1Attractions.length === 0 ? (
+              <div className="empty-filter-state">
+                <p>No sights found in this category.</p>
+                <button
+                  type="button"
+                  className="secondary small"
+                  onClick={() => setPlacesCategoryFilter("all")}
+                >
+                  Show All Sights
+                </button>
+              </div>
+            ) : (
+              filteredStep1Attractions.map((a, idx) => {
+                const key = a._id || a.osmId || a.name;
+                const isSelected = selectedKeys.has(key);
+                const isFree =
+                  a.category === "Place of Worship" ||
+                  a.category === "Beach" ||
+                  a.category === "Park & Nature" ||
+                  a.category === "Nature & Scenic Spot";
+                const priceLabel = isFree ? "Free Entry" : `₹${50 + (idx % 4) * 50}`;
+                const rating = a.rating || (4.3 + (idx % 6) * 0.1).toFixed(1);
+
+                return (
+                  <div
+                    key={key}
+                    className={`sight-select-item ${isSelected ? "selected" : ""}`}
+                    onClick={() => handleToggleAttraction(a)}
+                  >
+                    <div className="sight-checkbox-col">
+                      <input
+                        type="checkbox"
+                        className="sight-checkbox"
+                        checked={isSelected}
+                        onChange={() => {}} // Click handled by wrapper div
+                        aria-label={`Select ${a.name}`}
+                      />
+                    </div>
+
+                    <div className="sight-details-col">
+                      <div className="sight-title-row">
+                        <span className="sight-name">{a.name}</span>
+                        {a.isAiRecommended && (
+                          <span className="ai-pick-badge">✨ AI Recommended</span>
+                        )}
+                        <span className="badge category-badge">{a.category}</span>
+                      </div>
+
+                      <div className="sight-meta-row">
+                        <span className="rating-pill">⭐ {rating}</span>
+                        <span className={`entry-price-pill ${isFree ? "price-free" : "price-paid"}`}>
+                          {priceLabel}
+                        </span>
+                        {a.description && (
+                          <span className="sight-snippet">
+                            {a.description.length > 90 ? a.description.slice(0, 90) + "…" : a.description}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="sight-action-col">
+                      {onFocusMap && (
+                        <button
+                          type="button"
+                          className="secondary small map-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onFocusMap(a);
+                          }}
+                          title="Focus on Map"
+                        >
+                          📍 Map
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="step-actions-footer">
+            <div className="footer-status-text">
+              {trip.selectedAttractions.length === 0 ? (
+                <span className="status-warning-text">⚠️ Check options above to add sights to your trip</span>
+              ) : (
+                <span className="status-ready-text">
+                  ✓ <strong>{trip.selectedAttractions.length}</strong> {trip.selectedAttractions.length === 1 ? "sight" : "sights"} selected
+                </span>
+              )}
+            </div>
+
+            <button
+              type="button"
+              className="primary continue-btn"
+              disabled={trip.selectedAttractions.length === 0}
+              onClick={() => goToStep(2)}
+            >
+              Proceed with {trip.selectedAttractions.length} {trip.selectedAttractions.length === 1 ? "Sight" : "Sights"} ➔ Choose Hotel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* STEP 2: HOTEL SELECTION                                                    */}
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {step === 2 && (
+        <div className="planner-step-body">
+          <div className="step-heading-block">
+            <h3>Choose Where to Stay</h3>
+            <p className="step-instruction">
+              Optimized for your {trip.selectedAttractions.length} sights to minimize travel time.
+            </p>
+          </div>
+
+          {/* ── 1. Selected Sights Summary (Stop showing other tourist spots, show only selected) ── */}
+          <div className="step2-selected-spots-box">
+            <div className="step2-selected-header">
+              <div className="step2-selected-title">
+                <span className="step2-section-icon">🏛️</span>
+                <div>
+                  <strong>Your Selected Sights ({trip.selectedAttractions.length})</strong>
+                  <span className="step2-selected-subtitle">
+                    {activeShowAddMorePlaces
+                      ? "Showing other available sights below to add"
+                      : "Only your selected tourist spots are shown"}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="step2-add-places-toggle-btn"
+                onClick={() => setActiveShowAddMorePlaces(!activeShowAddMorePlaces)}
+              >
+                {activeShowAddMorePlaces ? "✓ Done Adding" : "➕ Add More Places"}
+              </button>
+            </div>
+
+            {/* Display ONLY selected tourist spots */}
+            <div className="step2-selected-chips-grid">
+              {trip.selectedAttractions.map((a) => {
+                const key = a._id || a.osmId || a.name;
+                return (
+                  <div key={key} className="step2-selected-chip">
+                    <span className="chip-name">{a.name}</span>
+                    <span className="chip-cat">{a.category || "Sight"}</span>
+                    {onFocusMap && (
+                      <button
+                        type="button"
+                        className="chip-focus-map-btn"
+                        onClick={() => onFocusMap(a)}
+                        title="Locate on map"
+                      >
+                        📍
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="chip-remove-sight-btn"
+                      onClick={() => removeAttraction(key)}
+                      title="Remove sight"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* When user wants to add more, show other places */}
+            {activeShowAddMorePlaces && (
+              <div className="step2-add-more-places-drawer">
+                <div className="drawer-header">
+                  <h5>Add More Sights in {cityName}:</h5>
+                  <span className="drawer-count">{remainingAttractions.length} more available</span>
+                </div>
+                {remainingAttractions.length === 0 ? (
+                  <p className="no-remaining-text">All available sights in {cityName} have been added!</p>
+                ) : (
+                  <div className="step2-remaining-places-list">
+                    {remainingAttractions.map((a) => {
+                      const key = a._id || a.osmId || a.name;
+                      return (
+                        <div key={key} className="remaining-place-row">
+                          <div className="remaining-place-info">
+                            <strong>{a.name}</strong>
+                            <span className="remaining-place-cat">{a.category}</span>
+                            {a.rating && <span className="remaining-place-rating">⭐ {a.rating}</span>}
+                          </div>
+                          <div className="remaining-place-actions">
+                            {onFocusMap && (
+                              <button
+                                type="button"
+                                className="secondary small map-btn"
+                                onClick={() => onFocusMap(a)}
+                                title="Locate on map"
+                              >
+                                📍 Map
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="add-sight-btn"
+                              onClick={() => addAttraction(a)}
+                            >
+                              + Add to Trip
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── 2. Hotel Selection (Once selected, stop showing other hotels) ── */}
+          <div className="step2-hotels-section">
+            {trip.selectedHotel && !activeIsChangingHotel ? (
+              /* Once selected, ONLY show the selected hotel */
+              <div className="single-selected-hotel-wrapper">
+                <div className="selected-hotel-banner">
+                  <div className="selected-hotel-banner-title">
+                    <span className="hotel-banner-icon">🏨</span>
+                    <div>
+                      <strong>Your Selected Stay</strong>
+                      <span className="hotel-banner-sub">Other hotels are hidden</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="change-hotel-btn"
+                    onClick={() => setActiveIsChangingHotel(true)}
+                  >
+                    🔄 Change Hotel
+                  </button>
+                </div>
+
+                <div className="planner-hotel-card selected-only">
+                  <div className="hotel-info-col">
+                    <div className="hotel-title-row">
+                      <h5>{trip.selectedHotel.name}</h5>
+                      {trip.selectedHotel.badge && (
+                        <span className={`rank-badge ${trip.selectedHotel.badge.type}`}>
+                          {trip.selectedHotel.badge.label}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="hotel-meta-row">
+                      <span className="hotel-rate">
+                        ₹{trip.selectedHotel.pricePerNight?.toLocaleString("en-IN")} / night
+                      </span>
+                      <span className="hotel-rating">⭐ {trip.selectedHotel.rating}</span>
+                      {trip.selectedHotel.address && (
+                        <span className="hotel-address-text">📍 {trip.selectedHotel.address}</span>
+                      )}
+                    </div>
+
+                    <div className="hotel-dist-row">
+                      <span>Avg to sights: <strong>{trip.selectedHotel.avgDistToAttractions || 2.4} km</strong></span>
+                      <span>·</span>
+                      <span>Arrival terminal: <strong>{trip.selectedHotel.distToArrival || 3.1} km</strong></span>
+                    </div>
+                  </div>
+
+                  <div className="hotel-action-col">
+                    <div className="mini-location-score">
+                      <strong>{trip.selectedHotel.locationScore || 88}</strong>
+                      <span>Location</span>
+                    </div>
+                    <span className="hotel-confirmed-pill">Selected Stay ✓</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Show all hotels when no hotel selected or user clicked "Change Hotel" */
+              <>
+                <div className="hotels-list-top-bar">
+                  <div className="category-filter-chips">
+                    {HOTEL_PRICE_FILTERS.map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        className={`filter-chip ${hotelFilter === f.id ? "active" : ""}`}
+                        onClick={() => setHotelFilter(f.id)}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  {activeIsChangingHotel && trip.selectedHotel && (
+                    <button
+                      type="button"
+                      className="cancel-change-hotel-btn"
+                      onClick={() => setActiveIsChangingHotel(false)}
+                    >
+                      Keep Current Hotel
+                    </button>
+                  )}
+                </div>
+
+                <div className="planner-hotels-list">
+                  {filteredHotels.map((h) => {
+                    const hotelKey = h._id || h.osmId || h.name;
+                    const isSelected =
+                      (trip.selectedHotel?._id || trip.selectedHotel?.osmId || trip.selectedHotel?.name) === hotelKey;
+
+                    return (
+                      <div
+                        key={hotelKey}
+                        className={`planner-hotel-card ${isSelected ? "selected" : ""}`}
+                        onClick={() => {
+                          selectHotel(h);
+                          setActiveIsChangingHotel(false);
+                        }}
+                      >
+                        <div className="hotel-info-col">
+                          <div className="hotel-title-row">
+                            <h5>{h.name}</h5>
+                            {h.badge && <span className={`rank-badge ${h.badge.type}`}>{h.badge.label}</span>}
+                          </div>
+
+                          <div className="hotel-meta-row">
+                            <span className="hotel-rate">₹{h.pricePerNight?.toLocaleString("en-IN")} / night</span>
+                            <span className="hotel-rating">⭐ {h.rating}</span>
+                          </div>
+
+                          <div className="hotel-dist-row">
+                            <span>Avg to sights: <strong>{h.avgDistToAttractions} km</strong></span>
+                            <span>·</span>
+                            <span>Arrival: <strong>{h.distToArrival} km</strong></span>
+                          </div>
+                        </div>
+
+                        <div className="hotel-action-col">
+                          <div className="mini-location-score">
+                            <strong>{h.locationScore}</strong>
+                            <span>Location</span>
+                          </div>
+                          <button
+                            type="button"
+                            className={`select-btn ${isSelected ? "selected" : ""}`}
+                          >
+                            {isSelected ? "Selected ✓" : "Select"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="step-actions-footer">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setActiveShowAddMorePlaces(false);
+                setActiveIsChangingHotel(false);
+                goToStep(1);
+              }}
+            >
+              ← Back to Places
+            </button>
+            <button
+              type="button"
+              className="primary continue-btn"
+              disabled={!trip.selectedHotel}
+              onClick={() => {
+                if (!trip.arrivalHub) selectArrivalHub(activeArrivalHub);
+                setActiveShowAddMorePlaces(false);
+                setActiveIsChangingHotel(false);
+                goToStep(3);
+              }}
+            >
+              Continue ➔ Transport
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* STEP 3: TRANSPORT & CAB                                                    */}
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {step === 3 && (
+        <div className="planner-step-body">
+          <div className="step-heading-block">
+            <h3>Airport / Station to Hotel Transfer</h3>
+            <p className="step-instruction">
+              Direct road route from your arrival terminal to your hotel.
+            </p>
+          </div>
+
+          {/* Visual Route Diagram */}
+          <div className="visual-route-card">
+            <div className="route-node">
+              <span className="node-icon">📍</span>
+              <div>
+                <span className="node-label">Arrival Terminal</span>
+                <strong>{trip.arrivalHub?.name || activeArrivalHub?.name}</strong>
+              </div>
+            </div>
+
+            <div className="route-connector">
+              <span className="down-arrow">↓</span>
+              <span className="connector-distance">{transitDistanceKm} km via road</span>
+              <span className="down-arrow">↓</span>
+            </div>
+
+            <div className="route-node">
+              <span className="node-icon">🏨</span>
+              <div>
+                <span className="node-label">Selected Hotel</span>
+                <strong>{trip.selectedHotel?.name}</strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Cab Selection Grid */}
+          <div className="cab-selection-section">
+            <h4>Select Vehicle:</h4>
+            <div className="cabs-grid">
+              {CAB_TYPES.map((cab) => {
+                const fare = calculateFare(cab);
+                const isChosen = chosenCabId === cab.id;
+
+                return (
+                  <button
+                    key={cab.id}
+                    type="button"
+                    className={`cab-card-btn ${isChosen ? "chosen" : ""}`}
+                    onClick={() => {
+                      setChosenCabId(cab.id);
+                      setCabConfirmed(false);
+                    }}
+                  >
+                    <span className="cab-icon">{cab.icon}</span>
+                    <span className="cab-name">{cab.name}</span>
+                    <span className="cab-fare">₹{fare}</span>
+                    <span className="cab-rate-detail">₹{cab.ratePerKm}/km</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              className={`confirm-ride-btn ${cabConfirmed ? "confirmed" : "primary"}`}
+              onClick={handleConfirmCab}
+            >
+              {cabConfirmed
+                ? "✓ Ride Confirmed"
+                : `Confirm Ride (₹${calculateFare(CAB_TYPES.find((c) => c.id === chosenCabId))}) ➔`}
+            </button>
+          </div>
+
+          <div className="step-actions-footer">
+            <button type="button" className="secondary" onClick={() => goToStep(2)}>
+              ← Back to Hotel
+            </button>
+            <button
+              type="button"
+              className="primary continue-btn"
+              onClick={() => {
+                if (!cabConfirmed) handleConfirmCab();
+                goToStep(4);
+              }}
+            >
+              Continue ➔ Tickets
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* STEP 4: ATTRACTION TICKETS                                                 */}
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {step === 4 && (
+        <div className="planner-step-body">
+          <div className="step-heading-block">
+            <h3>Attraction Passes & Entry Tickets</h3>
+            <p className="step-instruction">
+              Pre-book entry passes for your {trip.selectedAttractions.length} selected sights to skip lines.
+            </p>
+          </div>
+
+          <div className="tickets-checklist">
+            {trip.selectedAttractions.map((a) => {
+              const key = a._id || a.osmId || a.name;
+              const item = ticketsState[key] || { selected: true, visitors: 2, price: 0 };
+              const isFree = item.price === 0;
+
+              return (
+                <div key={key} className={`ticket-row-item ${item.selected ? "selected" : ""}`}>
+                  <div className="ticket-item-left">
+                    <input
+                      type="checkbox"
+                      id={`ticket-chk-${key}`}
+                      checked={item.selected}
+                      onChange={() => handleTicketToggle(key)}
+                    />
+                    <label htmlFor={`ticket-chk-${key}`}>
+                      <strong>{a.name}</strong>
+                      <span className="badge category-badge">{a.category}</span>
+                    </label>
+                  </div>
+
+                  <div className="ticket-item-right">
+                    <span className={`entry-badge ${isFree ? "free" : "paid"}`}>
+                      {isFree ? "FREE" : `₹${item.price}/person`}
+                    </span>
+
+                    {item.selected && !isFree && (
+                      <div className="visitor-counter">
+                        <button
+                          type="button"
+                          onClick={() => handleTicketVisitorChange(key, -1)}
+                          disabled={item.visitors <= 1}
+                        >
+                          -
+                        </button>
+                        <span>{item.visitors} visitors</span>
+                        <button
+                          type="button"
+                          onClick={() => handleTicketVisitorChange(key, 1)}
+                        >
+                          +
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="tickets-total-bar">
+            <span>Ticket Total:</span>
+            <strong>₹{ticketTotal}</strong>
+          </div>
+
+          <div className="step-actions-footer">
+            <button type="button" className="secondary" onClick={() => goToStep(3)}>
+              ← Back to Transport
+            </button>
+            <button type="button" className="secondary" onClick={handleSkipTickets}>
+              Skip
+            </button>
+            <button
+              type="button"
+              className="primary continue-btn"
+              onClick={handleConfirmTickets}
+            >
+              Confirm Tickets (₹{ticketTotal}) ➔
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* STEP 5: FINAL TRIP SUMMARY RECAP                                           */}
+      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {step === 5 && (
+        <div className="planner-step-body final-summary-body">
+          <div className="summary-banner-card">
+            <span className="summary-party-icon">🎉</span>
+            <h3>YOUR {cityName.toUpperCase()} TRIP</h3>
+            <p className="summary-duration-tag">{duration} Days Itinerary</p>
+          </div>
+
+          <div className="recap-sections-list">
+            {/* Arrival */}
+            <div className="recap-section-row">
+              <span className="recap-icon">🚆</span>
+              <div className="recap-content">
+                <span className="recap-label">ARRIVAL</span>
+                <strong>{trip.arrivalHub?.name || activeArrivalHub?.name}</strong>
+              </div>
+            </div>
+
+            {/* Hotel */}
+            <div className="recap-section-row">
+              <span className="recap-icon">🏨</span>
+              <div className="recap-content">
+                <span className="recap-label">HOTEL</span>
+                <strong>{trip.selectedHotel?.name}</strong>
+                <span className="recap-subtext">
+                  ₹{trip.selectedHotel?.pricePerNight?.toLocaleString("en-IN")} / night × {duration} nights
+                </span>
+              </div>
+            </div>
+
+            {/* Transport */}
+            <div className="recap-section-row">
+              <span className="recap-icon">🚕</span>
+              <div className="recap-content">
+                <span className="recap-label">TRANSPORT</span>
+                <strong>{trip.selectedCab?.name || "Sedan Cab"}</strong>
+                <span className="recap-subtext">₹{cabCost} (Transfer to hotel)</span>
+              </div>
+            </div>
+
+            {/* Day by Day Places */}
+            <div className="recap-section-row places-recap">
+              <span className="recap-icon">📍</span>
+              <div className="recap-content">
+                <span className="recap-label">PLACES SCHEDULE</span>
+                <div className="day-by-day-recap">
+                  {daySchedules.map((sights, idx) => (
+                    <div key={idx} className="recap-day-group">
+                      <strong>Day {idx + 1}</strong>
+                      <ul>
+                        {sights.map((s) => (
+                          <li key={s._id || s.osmId || s.name}>{s.name}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Tickets */}
+            <div className="recap-section-row">
+              <span className="recap-icon">🎟️</span>
+              <div className="recap-content">
+                <span className="recap-label">TICKETS</span>
+                <strong>₹{ticketTotal}</strong>
+              </div>
+            </div>
+
+            {/* Estimated Total */}
+            <div className="recap-total-box">
+              <span className="total-title">Estimated Total</span>
+              <span className="total-amount">₹{totalCost.toLocaleString("en-IN")}</span>
+            </div>
+          </div>
+
+          <div className="summary-actions-grid">
+            <button
+              type="button"
+              className="primary view-full-trip-btn"
+              onClick={onExitPlanning}
+            >
+              🗺️ View Full Trip on Map
+            </button>
+
+            <button
+              type="button"
+              className="secondary explore-more-btn"
+              onClick={onExitPlanning}
+            >
+              ← Explore More
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
