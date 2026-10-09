@@ -17,8 +17,10 @@ const HotelSchema = new mongoose.Schema(
     imageUrl: { type: String, default: "" },
     amenities: { type: [String], default: [] },
     bookingUrl: { type: String, default: "" }, // placeholder / mock booking link
-    source: { type: String, enum: ["overpass", "mock", "partner-api"], default: "mock" },
+    source: { type: String, default: "osm" },
     osmId: { type: String },
+    icon: { type: String, default: "🏨" },
+    type: { type: String, default: "Hotel" },
   },
   { timestamps: true }
 );

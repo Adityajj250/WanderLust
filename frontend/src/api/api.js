@@ -9,9 +9,10 @@ export async function geocodeDestination(query) {
   return data.destination;
 }
 
-export async function fetchAttractions(destinationQuery, lat, lon) {
+export async function fetchAttractions(destinationQuery, lat, lon, { days, travellers, interests } = {}, signal) {
   const { data } = await client.get("/attractions", {
-    params: { destinationQuery, lat, lon },
+    params: { destinationQuery, lat, lon, days, travellers, interests, _t: Date.now() },
+    signal,
   });
   return data.attractions;
 }
@@ -51,6 +52,10 @@ export async function fetchDistances(origin, destinations) {
  */
 const OSRM_BASE = "https://router.project-osrm.org/route/v1/driving";
 
+/**
+ * Returns { coords: [[lat,lon],...], distanceM: number } or null on failure.
+ * `distanceM` is the road distance in metres as reported by OSRM.
+ */
 export async function fetchRoadRoute(fromLat, fromLon, toLat, toLon) {
   try {
     const url = `${OSRM_BASE}/${fromLon},${fromLat};${toLon},${toLat}?geometries=geojson&overview=simplified`;
@@ -58,9 +63,10 @@ export async function fetchRoadRoute(fromLat, fromLon, toLat, toLon) {
     if (!res.ok) return null;
     const json = await res.json();
     if (json.code !== "Ok" || !json.routes?.length) return null;
+    const route = json.routes[0];
     // GeoJSON coordinates are [lon, lat]; Leaflet needs [lat, lon]
-    const coords = json.routes[0].geometry.coordinates;
-    return coords.map(([lon, lat]) => [lat, lon]);
+    const coords = route.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+    return { coords, distanceM: route.distance };
   } catch {
     return null;
   }
@@ -72,6 +78,19 @@ export async function generateAiTripPlan({ destination, days = 3, interests, bud
     days,
     interests,
     budget,
+  });
+  return data;
+}
+
+export async function askSunshineHome({ messages }) {
+  const { data } = await client.post("/ai/sunshine/home-chat", { messages });
+  return data;
+}
+
+export async function askSunshineWorkspace({ messages, screenContext }) {
+  const { data } = await client.post("/ai/sunshine/workspace-chat", {
+    messages,
+    screenContext,
   });
   return data;
 }

@@ -2,28 +2,57 @@ import React, { useState, useMemo, useEffect } from "react";
 import { useTrip } from "../context/TripContext.jsx";
 import { computeHotelLocationScores } from "../utils/locationScore.js";
 
-const CAB_TYPES = [
-  { id: "auto", name: "Auto Rickshaw", icon: "🛺", ratePerKm: 16, baseFare: 35 },
-  { id: "sedan", name: "Sedan / Mini", icon: "🚗", ratePerKm: 22, baseFare: 70 },
-  { id: "suv", name: "SUV / Prime", icon: "🚙", ratePerKm: 32, baseFare: 120 },
+const LOCAL_TRANSPORT_PACKAGES = [
+  {
+    id: "none",
+    name: "None (Self Transport)",
+    icon: "🚶",
+    price: 0,
+    rateText: "Free (₹0)",
+    detail: "Arrange your own transport · Walk, metro, or local taxi",
+  },
+  {
+    id: "auto-4h",
+    name: "Auto-Rickshaw / Local Cab",
+    icon: "🛺",
+    price: 1000,
+    rateText: "₹1,000 / 4 hrs (40 km)",
+    detail: "Short hops between hotel & nearby sights · Ideal for quick visits",
+  },
+  {
+    id: "compact-8h",
+    name: "Compact Car (Hatchback)",
+    icon: "🚗",
+    price: 2000,
+    rateText: "₹2,000 / 8 hrs/day (80 km)",
+    detail: "AC Hatchback · Up to 4 passengers · Dedicated driver for full day",
+  },
+  {
+    id: "sedan-8h",
+    name: "Comfort Sedan (Dzire / Etios)",
+    icon: "🚘",
+    price: 2800,
+    rateText: "₹2,800 / 8 hrs/day (80 km)",
+    detail: "AC Sedan · Extra luggage space · Dedicated driver for full day",
+  },
+  {
+    id: "suv-8h",
+    name: "Prime SUV (Innova / Ertiga)",
+    icon: "🚙",
+    price: 3800,
+    rateText: "₹3,800 / 8 hrs/day (80 km)",
+    detail: "6-7 seater SUV · Ultimate comfort for group/family sightseeing",
+  },
 ];
 
 const HOTEL_PRICE_FILTERS = [
-  { id: "all", label: "All" },
-  { id: "budget", label: "Budget (< ₹2,500)", max: 2500 },
-  { id: "moderate", label: "Moderate (₹2,500–₹4,500)", min: 2500, max: 4500 },
-  { id: "luxury", label: "Luxury (> ₹4,500)", min: 4500 },
+  { id: "all", label: "All Prices" },
+  { id: "under-2500", label: "Under ₹2,500", max: 2500 },
+  { id: "under-4000", label: "Under ₹4,000", max: 4000 },
+  { id: "under-6000", label: "Under ₹6,000", max: 6000 },
 ];
 
-const SIGHT_CATEGORY_FILTERS = [
-  { id: "all", label: "All Sights" },
-  { id: "temple", label: "Temples", match: ["Place of Worship", "Temple"] },
-  { id: "beach", label: "Beaches", match: ["Beach", "Coast"] },
-  { id: "museum", label: "Museums", match: ["Museum", "Art & Culture", "Gallery"] },
-  { id: "monument", label: "Monuments", match: ["Monuments & Landmarks", "Monument"] },
-  { id: "heritage", label: "Heritage", match: ["Heritage & Historic Site", "Fort & Palace", "Castle"] },
-  { id: "nature", label: "Nature & Views", match: ["Nature", "Park", "Viewpoint", "Waterfall"] },
-];
+import { SIGHT_CATEGORIES as SIGHT_CATEGORY_FILTERS, categorizeAttraction } from "../utils/categories.js";
 
 export default function TripPlannerFlow({
   destination,
@@ -32,10 +61,15 @@ export default function TripPlannerFlow({
   transportHubs = [],
   onExitPlanning,
   onFocusMap,
+  onSelectHotel,
   showAddMorePlaces,
   setShowAddMorePlaces,
   isChangingHotel,
   setIsChangingHotel,
+  onOpenBooking,
+  isFullTripMapOpen = false,
+  onToggleFullTripMap,
+  onOpenSunshine,
 }) {
   const {
     trip,
@@ -43,7 +77,6 @@ export default function TripPlannerFlow({
     addAttraction,
     removeAttraction,
     toggleAttraction,
-    selectAllAttractions,
     clearAttractions,
     selectHotel,
     selectArrivalHub,
@@ -72,8 +105,8 @@ export default function TripPlannerFlow({
   const [hotelFilter, setHotelFilter] = useState("all");
 
   // Local state for Step 3 cab choice
-  const [chosenCabId, setChosenCabId] = useState(trip.selectedCab?.id || "sedan");
-  const [cabConfirmed, setCabConfirmed] = useState(!!trip.selectedCab);
+  const [chosenCabId, setChosenCabId] = useState(trip.selectedCab?.id || "none");
+  // Selecting a package only saves the choice for the estimate — nothing is booked until the final step.
 
   // Local state for Step 4 tickets
   // Format: { [attractionKey]: { selected: boolean, visitors: number, price: number, name: string } }
@@ -134,26 +167,20 @@ export default function TripPlannerFlow({
     return attractions.filter((a) => !selectedKeys.has(a._id || a.osmId || a.name));
   }, [attractions, selectedKeys]);
 
+  const categoryCounts = useMemo(() => {
+    const counts = { all: attractions.length };
+    SIGHT_CATEGORY_FILTERS.forEach((cat) => {
+      if (cat.id !== "all") {
+        counts[cat.id] = attractions.filter((a) => categorizeAttraction(a).id === cat.id).length;
+      }
+    });
+    return counts;
+  }, [attractions]);
+
   const filteredStep1Attractions = useMemo(() => {
     if (placesCategoryFilter === "all") return attractions;
-    const filter = SIGHT_CATEGORY_FILTERS.find((f) => f.id === placesCategoryFilter);
-    if (!filter || !filter.match) return attractions;
-
-    return attractions.filter((a) => {
-      const cat = a.category || "";
-      return filter.match.some((m) => cat.toLowerCase().includes(m.toLowerCase()));
-    });
+    return attractions.filter((a) => categorizeAttraction(a).id === placesCategoryFilter);
   }, [attractions, placesCategoryFilter]);
-
-  function handleSelectTop5() {
-    // Select top 5 attractions (or all if fewer than 5)
-    const top5 = attractions.slice(0, 5);
-    selectAllAttractions(top5);
-  }
-
-  function handleSelectAll() {
-    selectAllAttractions(attractions);
-  }
 
   function handleClearAll() {
     clearAttractions();
@@ -163,20 +190,41 @@ export default function TripPlannerFlow({
     toggleAttraction(attraction);
   }
 
+  const [hotelSort, setHotelSort] = useState("score");
+
+  function handleHotelSelection(hotel) {
+    const hotelKey = hotel._id || hotel.osmId || hotel.name;
+    const currentKey = trip.selectedHotel?._id || trip.selectedHotel?.osmId || trip.selectedHotel?.name;
+    if (hotelKey === currentKey) {
+      selectHotel(null);
+      onSelectHotel?.(null);
+      return;
+    }
+    selectHotel(hotel);
+    onSelectHotel?.(hotel);
+  }
+
   // ─── Location Scored Hotels for Step 2 ──────────────────────────────────────
   const scoredHotels = useMemo(() => {
     return computeHotelLocationScores(hotels, trip.selectedAttractions, trip.arrivalHub);
   }, [hotels, trip.selectedAttractions, trip.arrivalHub]);
 
   const filteredHotels = useMemo(() => {
-    return scoredHotels.filter((h) => {
+    let list = scoredHotels.filter((h) => {
       const p = h.pricePerNight || 0;
-      if (hotelFilter === "budget") return p < 2500;
-      if (hotelFilter === "moderate") return p >= 2500 && p <= 4500;
-      if (hotelFilter === "luxury") return p > 4500;
+      if (hotelFilter === "under-2500") return p <= 2500;
+      if (hotelFilter === "under-4000") return p <= 4000;
+      if (hotelFilter === "under-6000") return p <= 6000;
       return true;
     });
-  }, [scoredHotels, hotelFilter]);
+
+    return list.sort((a, b) => {
+      if (hotelSort === "price-asc") return (a.pricePerNight || 0) - (b.pricePerNight || 0);
+      if (hotelSort === "price-desc") return (b.pricePerNight || 0) - (a.pricePerNight || 0);
+      if (hotelSort === "rating") return (b.rating || 0) - (a.rating || 0);
+      return (b.locationScore || 0) - (a.locationScore || 0);
+    });
+  }, [scoredHotels, hotelFilter, hotelSort]);
 
   // Ensure default arrival hub if none chosen
   const activeArrivalHub = useMemo(() => {
@@ -201,8 +249,8 @@ export default function TripPlannerFlow({
     return trip.selectedHotel.distToArrival || 3.5;
   }, [trip.selectedHotel]);
 
-  function calculateFare(cab) {
-    return Math.round(cab.baseFare + transitDistanceKm * cab.ratePerKm);
+  function calculateFare(pkg) {
+    return pkg?.price || 0;
   }
 
   // ─── Step 4 Tickets calculations ───────────────────────────────────────────
@@ -239,15 +287,13 @@ export default function TripPlannerFlow({
     setCurrentPlanStep(s);
   }
 
-  function handleConfirmCab() {
-    const cabObj = CAB_TYPES.find((c) => c.id === chosenCabId) || CAB_TYPES[1];
-    const fare = calculateFare(cabObj);
+  function saveCabChoice(cabId) {
+    const cabObj = LOCAL_TRANSPORT_PACKAGES.find((c) => c.id === cabId) || LOCAL_TRANSPORT_PACKAGES[0];
     selectCab({
       ...cabObj,
-      fare,
+      fare: calculateFare(cabObj),
       distanceKm: transitDistanceKm,
     });
-    setCabConfirmed(true);
   }
 
   function handleConfirmTickets() {
@@ -269,7 +315,7 @@ export default function TripPlannerFlow({
   // ─── Calculations for Step 5 Summary ───────────────────────────────────────
   const duration = trip.durationDays || 3;
   const hotelNightsCost = (trip.selectedHotel?.pricePerNight || 3000) * duration;
-  const cabCost = trip.selectedCab?.fare || (cabConfirmed ? calculateFare(CAB_TYPES.find((c) => c.id === chosenCabId)) : 0);
+  const cabCost = trip.selectedCab?.fare || 0;
   const totalCost = hotelNightsCost + cabCost + ticketTotal;
 
   // Distribute places across days for Step 5
@@ -291,38 +337,49 @@ export default function TripPlannerFlow({
           <span className="step-indicator-pill">Step {step} of 5</span>
           <button
             type="button"
+            className="planner-sunshine-btn"
+            onClick={onOpenSunshine}
+            title="Ask Sunshine about what's on your screen!"
+          >
+            ☀️ Ask Sunshine
+          </button>
+        </div>
+
+        <div className="stepper-breadcrumbs-row">
+          <div className="progressive-step-breadcrumbs">
+            {[
+              { s: 1, label: "1. Places" },
+              { s: 2, label: "2. Hotel" },
+              { s: 3, label: "3. Transport" },
+              { s: 4, label: "4. Tickets" },
+              { s: 5, label: "5. Trip" },
+            ].map((item) => (
+              <button
+                key={item.s}
+                type="button"
+                className={`breadcrumb-step ${step === item.s ? "active" : ""} ${
+                  step > item.s ? "completed" : ""
+                }`}
+                onClick={() => {
+                  // Only allow navigating backwards or to next available step
+                  if (item.s <= step || (item.s === 2 && trip.selectedAttractions.length > 0)) {
+                    goToStep(item.s);
+                  }
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
             className="planner-exit-btn"
             onClick={onExitPlanning}
             title="Exit trip planner to open map"
           >
             ✕ Exit Planner
           </button>
-        </div>
-
-        <div className="progressive-step-breadcrumbs">
-          {[
-            { s: 1, label: "1. Places" },
-            { s: 2, label: "2. Hotel" },
-            { s: 3, label: "3. Transport" },
-            { s: 4, label: "4. Tickets" },
-            { s: 5, label: "5. Trip" },
-          ].map((item) => (
-            <button
-              key={item.s}
-              type="button"
-              className={`breadcrumb-step ${step === item.s ? "active" : ""} ${
-                step > item.s ? "completed" : ""
-              }`}
-              onClick={() => {
-                // Only allow navigating backwards or to next available step
-                if (item.s <= step || (item.s === 2 && trip.selectedAttractions.length > 0)) {
-                  goToStep(item.s);
-                }
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -363,22 +420,6 @@ export default function TripPlannerFlow({
             </div>
 
             <div className="batch-action-buttons">
-              <button
-                type="button"
-                className="batch-btn top5"
-                onClick={handleSelectTop5}
-                title="Select top 5 iconic sights"
-              >
-                ⭐ Top 5
-              </button>
-              <button
-                type="button"
-                className="batch-btn select-all"
-                onClick={handleSelectAll}
-                title="Select all sights"
-              >
-                ✓ Select All
-              </button>
               <button
                 type="button"
                 className="batch-btn clear"
@@ -476,7 +517,10 @@ export default function TripPlannerFlow({
 
                     <div className="sight-details-col">
                       <div className="sight-title-row">
-                        <span className="sight-name">{a.name}</span>
+                        <span className="sight-name">
+                          <span className="sight-card-icon" style={{ marginRight: "6px" }}>{a.icon || "🏛️"}</span>
+                          {a.name}
+                        </span>
                         {a.isAiRecommended && (
                           <span className="ai-pick-badge">✨ AI Recommended</span>
                         )}
@@ -497,6 +541,17 @@ export default function TripPlannerFlow({
                     </div>
 
                     <div className="sight-action-col">
+                      <a
+                        className="know-more-btn sight-know-more-btn secondary small"
+                        href={`https://www.google.com/search?q=${encodeURIComponent(`${a.name} ${cityName} tourist attraction reviews photos`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        title="Search photos & reviews on Google"
+                        style={{ textDecoration: "none", fontSize: "0.78rem", padding: "4px 8px" }}
+                      >
+                        🔍 Know more
+                      </a>
                       {onFocusMap && (
                         <button
                           type="button"
@@ -661,7 +716,7 @@ export default function TripPlannerFlow({
               <div className="single-selected-hotel-wrapper">
                 <div className="selected-hotel-banner">
                   <div className="selected-hotel-banner-title">
-                    <span className="hotel-banner-icon">🏨</span>
+                    <span className="hotel-banner-icon">{trip.selectedHotel.icon || "🏨"}</span>
                     <div>
                       <strong>Your Selected Stay</strong>
                       <span className="hotel-banner-sub">Other hotels are hidden</span>
@@ -679,7 +734,10 @@ export default function TripPlannerFlow({
                 <div className="planner-hotel-card selected-only">
                   <div className="hotel-info-col">
                     <div className="hotel-title-row">
-                      <h5>{trip.selectedHotel.name}</h5>
+                      <h5>
+                        <span className="hotel-card-icon" style={{ marginRight: "6px" }}>{trip.selectedHotel.icon || "🏨"}</span>
+                        {trip.selectedHotel.name}
+                      </h5>
                       {trip.selectedHotel.badge && (
                         <span className={`rank-badge ${trip.selectedHotel.badge.type}`}>
                           {trip.selectedHotel.badge.label}
@@ -709,6 +767,17 @@ export default function TripPlannerFlow({
                       <strong>{trip.selectedHotel.locationScore || 88}</strong>
                       <span>Location</span>
                     </div>
+                    <a
+                      className="know-more-btn hotel-know-more-btn secondary small"
+                      href={`https://www.google.com/search?q=${encodeURIComponent(`${trip.selectedHotel.name} ${cityName} hotel reviews photos`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      title="Search photos & reviews on Google"
+                      style={{ textDecoration: "none", fontSize: "0.78rem", padding: "4px 8px", marginTop: "4px" }}
+                    >
+                      🔍 Know more
+                    </a>
                     <span className="hotel-confirmed-pill">Selected Stay ✓</span>
                   </div>
                 </div>
@@ -717,17 +786,34 @@ export default function TripPlannerFlow({
               /* Show all hotels when no hotel selected or user clicked "Change Hotel" */
               <>
                 <div className="hotels-list-top-bar">
-                  <div className="category-filter-chips">
-                    {HOTEL_PRICE_FILTERS.map((f) => (
-                      <button
-                        key={f.id}
-                        type="button"
-                        className={`filter-chip ${hotelFilter === f.id ? "active" : ""}`}
-                        onClick={() => setHotelFilter(f.id)}
+                  <div className="hotel-filters-toolbar">
+                    <div className="hotel-filter-pills">
+                      <span className="filter-label">Max Price:</span>
+                      {HOTEL_PRICE_FILTERS.map((f) => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          className={`filter-chip ${hotelFilter === f.id ? "active" : ""}`}
+                          onClick={() => setHotelFilter(f.id)}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="hotel-sort-wrap">
+                      <span className="filter-label">Sort:</span>
+                      <select
+                        className="hotel-sort-select"
+                        value={hotelSort}
+                        onChange={(e) => setHotelSort(e.target.value)}
                       >
-                        {f.label}
-                      </button>
-                    ))}
+                        <option value="score">📍 Best Location</option>
+                        <option value="price-asc">💰 Price: Low to High</option>
+                        <option value="price-desc">💎 Price: High to Low</option>
+                        <option value="rating">⭐ Top Rated</option>
+                      </select>
+                    </div>
                   </div>
                   {activeIsChangingHotel && trip.selectedHotel && (
                     <button
@@ -751,13 +837,16 @@ export default function TripPlannerFlow({
                         key={hotelKey}
                         className={`planner-hotel-card ${isSelected ? "selected" : ""}`}
                         onClick={() => {
-                          selectHotel(h);
+                          handleHotelSelection(h);
                           setActiveIsChangingHotel(false);
                         }}
                       >
                         <div className="hotel-info-col">
                           <div className="hotel-title-row">
-                            <h5>{h.name}</h5>
+                            <h5>
+                              <span className="hotel-card-icon" style={{ marginRight: "6px" }}>{h.icon || "🏨"}</span>
+                              {h.name}
+                            </h5>
                             {h.badge && <span className={`rank-badge ${h.badge.type}`}>{h.badge.label}</span>}
                           </div>
 
@@ -778,6 +867,17 @@ export default function TripPlannerFlow({
                             <strong>{h.locationScore}</strong>
                             <span>Location</span>
                           </div>
+                          <a
+                            className="know-more-btn hotel-know-more-btn secondary small"
+                            href={`https://www.google.com/search?q=${encodeURIComponent(`${h.name} ${cityName} hotel reviews photos`)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Search photos & reviews on Google"
+                            style={{ textDecoration: "none", fontSize: "0.78rem", padding: "4px 8px" }}
+                          >
+                            🔍 Know more
+                          </a>
                           <button
                             type="button"
                             className={`select-btn ${isSelected ? "selected" : ""}`}
@@ -834,6 +934,57 @@ export default function TripPlannerFlow({
             </p>
           </div>
 
+          {/* Arrival Mode Selection in Step 3 */}
+          <div className="planner-arrival-mode-select">
+            <span className="section-mini-title">Select Arrival Mode:</span>
+            <div className="planner-arrival-modes-grid">
+              {[
+                { id: "train", label: "By Train", icon: "🚆", hubType: "Railway Station" },
+                { id: "flight", label: "By Flight", icon: "✈️", hubType: "Airport" },
+                { id: "bus", label: "By Bus", icon: "🚌", hubType: "Bus Station" },
+                { id: "car", label: "Self Drive", icon: "🚗", hubType: "Other" },
+              ].map((mode) => {
+                const currentHub = trip.arrivalHub || activeArrivalHub;
+                const isSelected = currentHub?.type === mode.hubType || (!currentHub && mode.id === "train");
+
+                return (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    className={`arrival-mode-pill-btn ${isSelected ? "selected" : ""}`}
+                    onClick={() => {
+                      let hub;
+                      if (mode.id === "car") {
+                        hub = {
+                          name: `${destination?.displayName?.split(",")[0] || "City"} Entry Point`,
+                          type: "Other",
+                          lat: destination?.lat,
+                          lon: destination?.lon,
+                        };
+                      } else {
+                        hub = transportHubs.find((h) => h.type === mode.hubType);
+                        if (!hub && mode.id === "bus") hub = transportHubs.find((h) => h.type === "Bus Stop");
+                        if (!hub) {
+                          hub = {
+                            name: `${destination?.displayName?.split(",")[0] || "City"} ${mode.label} Terminal`,
+                            type: mode.hubType,
+                            lat: (destination?.lat || 0) + 0.012,
+                            lon: (destination?.lon || 0) + 0.012,
+                          };
+                        }
+                      }
+                      selectArrivalHub(hub);
+                    }}
+                  >
+                    <span className="mode-pill-icon">{mode.icon}</span>
+                    <span className="mode-pill-label">{mode.label}</span>
+                    {isSelected && <span className="mode-pill-badge">Selected ✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Visual Route Diagram */}
           <div className="visual-route-card">
             <div className="route-node">
@@ -861,9 +1012,9 @@ export default function TripPlannerFlow({
 
           {/* Cab Selection Grid */}
           <div className="cab-selection-section">
-            <h4>Select Vehicle:</h4>
+            <h4>Choose a local travel package:</h4>
             <div className="cabs-grid">
-              {CAB_TYPES.map((cab) => {
+              {LOCAL_TRANSPORT_PACKAGES.map((cab) => {
                 const fare = calculateFare(cab);
                 const isChosen = chosenCabId === cab.id;
 
@@ -871,30 +1022,23 @@ export default function TripPlannerFlow({
                   <button
                     key={cab.id}
                     type="button"
-                    className={`cab-card-btn ${isChosen ? "chosen" : ""}`}
+                    className={`cab-card-btn ${isChosen ? "chosen selected" : ""}`}
                     onClick={() => {
                       setChosenCabId(cab.id);
-                      setCabConfirmed(false);
+                      saveCabChoice(cab.id);
                     }}
                   >
                     <span className="cab-icon">{cab.icon}</span>
                     <span className="cab-name">{cab.name}</span>
-                    <span className="cab-fare">₹{fare}</span>
-                    <span className="cab-rate-detail">₹{cab.ratePerKm}/km</span>
+                    <span className="cab-fare">{cab.rateText || (fare === 0 ? "Free" : `₹${fare}`)}</span>
+                    <span className="cab-rate-detail">{cab.detail}</span>
+                    <span className={`cab-selected-pill ${isChosen ? "selected" : ""}`}>
+                      {isChosen ? "Selected ✓" : "Select"}
+                    </span>
                   </button>
                 );
               })}
             </div>
-
-            <button
-              type="button"
-              className={`confirm-ride-btn ${cabConfirmed ? "confirmed" : "primary"}`}
-              onClick={handleConfirmCab}
-            >
-              {cabConfirmed
-                ? "✓ Ride Confirmed"
-                : `Confirm Ride (₹${calculateFare(CAB_TYPES.find((c) => c.id === chosenCabId))}) ➔`}
-            </button>
           </div>
 
           <div className="step-actions-footer">
@@ -905,7 +1049,7 @@ export default function TripPlannerFlow({
               type="button"
               className="primary continue-btn"
               onClick={() => {
-                if (!cabConfirmed) handleConfirmCab();
+                saveCabChoice(chosenCabId);
                 goToStep(4);
               }}
             >
@@ -923,7 +1067,7 @@ export default function TripPlannerFlow({
           <div className="step-heading-block">
             <h3>Attraction Passes & Entry Tickets</h3>
             <p className="step-instruction">
-              Pre-book entry passes for your {trip.selectedAttractions.length} selected sights to skip lines.
+              Choose the entry passes you'll need for your {trip.selectedAttractions.length} selected sights. Nothing is booked yet — booking happens at the final step.
             </p>
           </div>
 
@@ -994,7 +1138,7 @@ export default function TripPlannerFlow({
               className="primary continue-btn"
               onClick={handleConfirmTickets}
             >
-              Confirm Tickets (₹{ticketTotal}) ➔
+              Continue ➔ Summary
             </button>
           </div>
         </div>
@@ -1007,7 +1151,7 @@ export default function TripPlannerFlow({
         <div className="planner-step-body final-summary-body">
           <div className="summary-banner-card">
             <span className="summary-party-icon">🎉</span>
-            <h3>YOUR {cityName.toUpperCase()} TRIP</h3>
+            <h3>YOUR {cityName.toUpperCase()} TRIP Budget Estimate</h3>
             <p className="summary-duration-tag">{duration} Days Itinerary</p>
           </div>
 
@@ -1079,21 +1223,30 @@ export default function TripPlannerFlow({
             </div>
           </div>
 
-          <div className="summary-actions-grid">
-            <button
-              type="button"
-              className="primary view-full-trip-btn"
-              onClick={onExitPlanning}
-            >
-              🗺️ View Full Trip on Map
-            </button>
-
+          <div className="summary-actions-grid summary-actions-3col">
             <button
               type="button"
               className="secondary explore-more-btn"
               onClick={onExitPlanning}
             >
               ← Explore More
+            </button>
+
+            <button
+              type="button"
+              className="primary view-full-trip-btn"
+              onClick={onToggleFullTripMap}
+              disabled={!trip.selectedHotel || trip.selectedAttractions.length === 0}
+            >
+              {isFullTripMapOpen ? "🗺️ Hide Full Trip Map" : "🗺️ View Full Trip on Map"}
+            </button>
+
+            <button
+              type="button"
+              className="primary book-now-btn"
+              onClick={onOpenBooking}
+            >
+              🎫 Book Now
             </button>
           </div>
         </div>

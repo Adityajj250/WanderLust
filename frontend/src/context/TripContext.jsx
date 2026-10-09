@@ -5,14 +5,23 @@ const TripContext = createContext(null);
 const STORAGE_KEY = "travel_planner_trip_data";
 
 export function TripProvider({ children }) {
+  // Clear any legacy localStorage data so everything starts fresh
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem("wanderlust_booking_state");
+  } catch (_) {}
+
   const [trip, setTrip] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = sessionStorage.getItem(STORAGE_KEY);
       if (saved) return JSON.parse(saved);
     } catch (_) {}
     return {
       destination: null, // { query, displayName, lat, lon }
       durationDays: 3,
+      startDate: "",
+      endDate: "",
+      travellers: 1,
       selectedAttractions: [], // array of attraction objects
       selectedHotel: null,
       arrivalHub: null, // { name, type, lat, lon }
@@ -52,9 +61,22 @@ export function TripProvider({ children }) {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(trip));
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(trip));
     } catch (_) {}
   }, [trip]);
+
+  // Clean backend cache & session data when window or session ends
+  useEffect(() => {
+    const handleSessionEnd = () => {
+      try {
+        sessionStorage.clear();
+        navigator.sendBeacon("/api/session/reset");
+      } catch (_) {}
+    };
+
+    window.addEventListener("pagehide", handleSessionEnd);
+    return () => window.removeEventListener("pagehide", handleSessionEnd);
+  }, []);
 
   function initDestination(dest, initialAttractions = [], initialIsPlanning = false) {
     setTrip((prev) => {
@@ -73,29 +95,33 @@ export function TripProvider({ children }) {
     });
   }
 
-  function setDestination(dest) {
+  function setDurationDays(days) {
+    setTrip((prev) => ({ ...prev, durationDays: Math.max(1, Math.min(30, Number(days) || 1)) }));
+  }
+
+  function setTripDates({ startDate, endDate }) {
     setTrip((prev) => {
-      // If switching to a new destination, reset destination-specific selections
-      const isNew = !prev.destination || prev.destination.query?.toLowerCase() !== dest?.query?.toLowerCase();
-      if (isNew) {
-        return {
-          ...prev,
-          destination: dest,
-          selectedAttractions: [],
-          selectedHotel: null,
-          arrivalHub: null,
-          selectedCab: null,
-          tickets: {},
-          currentPlanStep: 1,
-          isPlanning: false,
-        };
+      let days = prev.durationDays;
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const diffTime = end - start;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+        if (diffDays > 0) {
+          days = Math.min(30, diffDays);
+        }
       }
-      return { ...prev, destination: dest };
+      return {
+        ...prev,
+        startDate: startDate !== undefined ? startDate : prev.startDate,
+        endDate: endDate !== undefined ? endDate : prev.endDate,
+        durationDays: days,
+      };
     });
   }
 
-  function setDurationDays(days) {
-    setTrip((prev) => ({ ...prev, durationDays: Math.max(1, Math.min(7, Number(days) || 1)) }));
+  function setTravellers(count) {
+    setTrip((prev) => ({ ...prev, travellers: Math.max(1, Math.min(50, Number(count) || 1)) }));
   }
 
   function addAttraction(attraction) {
@@ -165,13 +191,6 @@ export function TripProvider({ children }) {
     });
   }
 
-  function setSelectedAttractions(attractions) {
-    setTrip((prev) => ({
-      ...prev,
-      selectedAttractions: attractions,
-    }));
-  }
-
   function selectHotel(hotel) {
     setTrip((prev) => ({ ...prev, selectedHotel: hotel }));
   }
@@ -196,20 +215,6 @@ export function TripProvider({ children }) {
     setTrip((prev) => ({ ...prev, isPlanning: bool }));
   }
 
-  function resetTrip() {
-    setTrip({
-      destination: null,
-      durationDays: 3,
-      selectedAttractions: [],
-      selectedHotel: null,
-      arrivalHub: null,
-      selectedCab: null,
-      tickets: {},
-      currentPlanStep: 1,
-      isPlanning: false,
-    });
-  }
-
   function openAiModal(initialDest = "") {
     setAiModalInitialDest(initialDest);
     setIsAiModalOpen(true);
@@ -224,21 +229,20 @@ export function TripProvider({ children }) {
       value={{
         trip,
         initDestination,
-        setDestination,
         setDurationDays,
+        setTripDates,
+        setTravellers,
         addAttraction,
         toggleAttraction,
         selectAllAttractions,
         clearAttractions,
         removeAttraction,
-        setSelectedAttractions,
         selectHotel,
         selectArrivalHub,
         selectCab,
         updateTickets,
         setCurrentPlanStep,
         setIsPlanning,
-        resetTrip,
         isAiModalOpen,
         aiModalInitialDest,
         openAiModal,

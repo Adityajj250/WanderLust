@@ -11,7 +11,7 @@ function buildTransportOverpassQuery(lat, lon) {
   return `
     [out:json][timeout:25];
     (
-      nwr["aeroway"~"aerodrome|terminal"](around:35000,${lat},${lon});
+      nwr["aeroway"~"aerodrome|terminal"](around:100000,${lat},${lon});
       nwr["railway"~"station|halt"](around:20000,${lat},${lon});
       nwr["amenity"="bus_station"](around:15000,${lat},${lon});
       nwr["public_transport"="station"](around:15000,${lat},${lon});

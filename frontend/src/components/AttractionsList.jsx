@@ -1,15 +1,16 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import AttractionCard from "./AttractionCard.jsx";
 import { useTrip } from "../context/TripContext.jsx";
 
 const CATEGORY_FILTERS = [
   { id: "all", label: "All Sights" },
-  { id: "temple", label: "Temples", match: ["Place of Worship", "Temple"] },
-  { id: "beach", label: "Beaches", match: ["Beach", "Coast"] },
-  { id: "museum", label: "Museums", match: ["Museum", "Art & Culture", "Gallery"] },
-  { id: "monument", label: "Monuments", match: ["Monuments & Landmarks", "Monument"] },
-  { id: "viewpoint", label: "Viewpoints", match: ["Viewpoint", "Nature & Scenic Spot", "Waterfall"] },
-  { id: "heritage", label: "Heritage", match: ["Heritage & Historic Site", "Fort & Palace", "Castle"] },
+  { id: "temple", label: "🛕 Temples & Worship", match: ["Place of Worship", "Temple", "Mosque", "Church"] },
+  { id: "beach", label: "🏖️ Beaches & Waters", match: ["Beach", "Coast", "Swimming Area", "Waterfall"] },
+  { id: "museum", label: "🏛️ Museums & Culture", match: ["Museum", "Art & Culture", "Gallery", "Theatre"] },
+  { id: "monument", label: "🗿 Monuments & Landmarks", match: ["Monuments & Landmarks", "Monument", "Theme Park", "Stadium", "Attraction"] },
+  { id: "heritage", label: "🏰 Heritage & Forts", match: ["Heritage & Historic Site", "Fort & Palace", "Castle", "Ruins", "Archaeological Site"] },
+  { id: "nature", label: "🌅 Nature & Views", match: ["Nature", "Park", "Viewpoint", "Reserve", "Zoo"] },
+  { id: "dining", label: "🍽️ Dining & Markets", match: ["Restaurant", "Cafe", "Food", "Market", "Mall", "Shopping"] },
 ];
 
 export default function AttractionsList({
@@ -17,17 +18,39 @@ export default function AttractionsList({
   hotelDistances = [],
   onFocusMap,
   onStartPlanning,
+  focusedAttraction = null,
 }) {
   const [activeCategory, setActiveCategory] = useState("all");
   const {
     trip,
     addAttraction,
     removeAttraction,
-    selectAllAttractions,
     clearAttractions,
     setIsPlanning,
     setCurrentPlanStep,
   } = useTrip();
+
+  // When a sight is focused from the map: ensure it's visible (reset category
+  // filter if needed) then scroll to it. A short timeout lets React flush the
+  // potential category reset before we query the DOM.
+  useEffect(() => {
+    if (!focusedAttraction) return;
+    const key = focusedAttraction._id || focusedAttraction.osmId || focusedAttraction.name;
+
+    // If the current filter is hiding this attraction, reset to "all"
+    if (activeCategory !== "all") {
+      const filter = CATEGORY_FILTERS.find((f) => f.id === activeCategory);
+      const cat = focusedAttraction.category || "";
+      const visible = !filter?.match || filter.match.some((m) => cat.toLowerCase().includes(m.toLowerCase()));
+      if (!visible) setActiveCategory("all");
+    }
+
+    const t = setTimeout(() => {
+      const el = document.getElementById(`attraction-card-${key}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+    return () => clearTimeout(t);
+  }, [focusedAttraction]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedKeys = useMemo(() => {
     return new Set(trip.selectedAttractions.map((a) => a._id || a.osmId || a.name));
@@ -53,14 +76,6 @@ export default function AttractionsList({
     }
   }
 
-  function handleSelectTop5() {
-    selectAllAttractions(attractions.slice(0, 5));
-  }
-
-  function handleSelectAll() {
-    selectAllAttractions(attractions);
-  }
-
   function handleClearAll() {
     clearAttractions();
   }
@@ -75,30 +90,13 @@ export default function AttractionsList({
     <div className="attractions-tab-view">
       <div className="tab-intro-row">
         <div>
-          <h3>Top Attractions & Heritage Sights</h3>
+          <h3>Curated Hot Picks & Heritage Sights</h3>
           <p className="tab-subtitle">
-            Explore and add places to your trip. Select multiple sights to optimize your hotel and transit around them!
+            Real OpenStreetMap landmarks curated by Gemini AI for your trip. Select sights to optimize your hotel and transit around them!
           </p>
         </div>
 
-        {/* Quick batch multi-select controls */}
         <div className="attractions-batch-controls">
-          <button
-            type="button"
-            className="secondary small batch-btn"
-            onClick={handleSelectTop5}
-            title="Select top 5 iconic sights"
-          >
-            ⭐ Top 5
-          </button>
-          <button
-            type="button"
-            className="secondary small batch-btn"
-            onClick={handleSelectAll}
-            title="Select all sights"
-          >
-            ✓ Select All
-          </button>
           {trip.selectedAttractions.length > 0 && (
             <button
               type="button"
@@ -156,14 +154,16 @@ export default function AttractionsList({
             const isInTrip = selectedKeys.has(key);
 
             return (
-              <AttractionCard
-                key={key}
-                attraction={attraction}
-                distanceKm={dist?.distanceKm}
-                isInTrip={isInTrip}
-                onToggleTrip={handleToggleTrip}
-                onFocusMap={onFocusMap}
-              />
+              <div key={key} id={`attraction-card-${key}`}>
+                <AttractionCard
+                  attraction={attraction}
+                  distanceKm={dist?.distanceKm}
+                  isInTrip={isInTrip}
+                  onToggleTrip={handleToggleTrip}
+                  onFocusMap={onFocusMap}
+                  isFocused={(focusedAttraction?._id || focusedAttraction?.osmId || focusedAttraction?.name) === key}
+                />
+              </div>
             );
           })}
         </div>

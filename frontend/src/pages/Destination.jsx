@@ -6,6 +6,9 @@ import AttractionsList from "../components/AttractionsList.jsx";
 import HotelsList from "../components/HotelsList.jsx";
 import TransportView from "../components/TransportView.jsx";
 import TripPlannerFlow from "../components/TripPlannerFlow.jsx";
+import BookingFlow from "../components/BookingFlow.jsx";
+import WeatherBanner from "../components/WeatherBanner.jsx";
+import SunshineWorkspaceModal from "../components/SunshineWorkspaceModal.jsx";
 import { useTrip } from "../context/TripContext.jsx";
 import {
   geocodeDestination,
@@ -26,6 +29,7 @@ export default function Destination() {
     selectArrivalHub,
     setIsPlanning,
     setCurrentPlanStep,
+    openAiModal,
   } = useTrip();
 
   const [status, setStatus] = useState("loading"); // 'loading' | 'ready' | 'error'
@@ -35,25 +39,55 @@ export default function Destination() {
   const [attractions, setAttractions] = useState([]);
   const [hotels, setHotels] = useState([]);
   const [transportHubs, setTransportHubs] = useState([]);
+  const [isSunshineOpen, setIsSunshineOpen] = useState(false);
+  const [screenWeather, setScreenWeather] = useState(null);
 
   // Top-Level Workspace Tabs: 'overview' | 'attractions' | 'hotels' | 'transport'
   const [activeTab, setActiveTab] = useState("overview");
 
-  // Map Filter: 'all' | 'attractions' | 'hotels' | 'transport'
-  const [mapLayer, setMapLayer] = useState("all");
+  // Users can independently show or hide each map layer.
+  const [mapLayers, setMapLayers] = useState(["attractions", "hotels", "transport"]);
 
   // Inspected items on map
   const [inspectedHotel, setInspectedHotel] = useState(null);
   const [inspectedAttraction, setInspectedAttraction] = useState(null);
   const [hotelDistances, setHotelDistances] = useState([]);
+  const [hubToHotelDistances, setHubToHotelDistances] = useState([]);
+  // Transport hub clicked on map → triggers hub→hotels road lines
+  const [selectedTransportHub, setSelectedTransportHub] = useState(null);
 
   // State for adding more places and changing hotel during planning
   const [showAddMorePlaces, setShowAddMorePlaces] = useState(false);
   const [isChangingHotel, setIsChangingHotel] = useState(false);
 
+  // Full trip map view (selected hotel + selected sights, all linked)
+  const [showFullTripMap, setShowFullTripMap] = useState(false);
+
+  // Full-screen booking mode
+  const [isBooking, setIsBooking] = useState(false);
+  const [bookingState, setBookingState] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("wanderlust_booking_state");
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return {};
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("wanderlust_booking_state", JSON.stringify(bookingState));
+    } catch (_) {}
+  }, [bookingState]);
+
   // Load destination + POIs
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+
+    // Immediately reset previous destination's places
+    setAttractions([]);
+    setHotels([]);
+    setTransportHubs([]);
 
     async function load() {
       setStatus("loading");
@@ -65,7 +99,16 @@ export default function Destination() {
         setDestination(dest);
 
         const [attractionsData, hotelsData, transportData] = await Promise.all([
-          fetchAttractions(query, dest.lat, dest.lon),
+          fetchAttractions(
+            query,
+            dest.lat,
+            dest.lon,
+            {
+              days: trip.durationDays,
+              travellers: trip.travellers,
+            },
+            controller.signal
+          ),
           fetchHotels(query, dest.lat, dest.lon),
           fetchTransportHubs(query, dest.lat, dest.lon).catch(() => []),
         ]);
@@ -150,7 +193,7 @@ export default function Destination() {
 
         setStatus("ready");
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || err.name === "CanceledError" || err.name === "AbortError" || err.code === "ERR_CANCELED") return;
         console.error(err);
         setErrorMessage(
           err.response?.data?.error || "Couldn't locate that destination. Please try another search."
@@ -162,14 +205,33 @@ export default function Destination() {
     load();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Handle hotel inspection / distance calculation
+  // Handle hotel selection/toggle — also used by Map button in HotelsList
   const handleSelectHotel = useCallback(
     async (hotel) => {
+      if (!hotel) {
+        // explicit clear (called with null)
+        selectHotel(null);
+        setInspectedHotel(null);
+        setHotelDistances([]);
+        return;
+      }
+      const hotelKey = hotel._id || hotel.osmId || hotel.name;
+      const selectedKey = trip.selectedHotel?._id || trip.selectedHotel?.osmId || trip.selectedHotel?.name;
+      // Toggle: clicking the same hotel again → neutral state
+      if (hotelKey === selectedKey) {
+        selectHotel(null);
+        setInspectedHotel(null);
+        setHotelDistances([]);
+        return;
+      }
       setInspectedHotel(hotel);
       selectHotel(hotel);
+      // Switch right panel to Hotels tab so the card is visible
+      if (!trip.isPlanning) setActiveTab("hotels");
       try {
         const d = await fetchDistances(hotel, attractions);
         setHotelDistances(d || []);
@@ -177,46 +239,95 @@ export default function Destination() {
         console.error(err);
       }
     },
-    [attractions, selectHotel]
+    [attractions, selectHotel, trip.selectedHotel, trip.isPlanning]
   );
+
+  // Map button in HotelsList: highlights hotel on map and switches to hotels tab
+  const handleFocusHotelOnMap = useCallback((hotel) => {
+    handleSelectHotel(hotel);
+    if (!trip.isPlanning) setActiveTab("hotels");
+  }, [handleSelectHotel, trip.isPlanning]);
 
   const handleSelectAttraction = useCallback((attraction) => {
     setInspectedAttraction(attraction);
+    if (!trip.isPlanning) setActiveTab("attractions");
+  }, [trip.isPlanning]);
+
+  const toggleMapLayer = useCallback((layer) => {
+    setMapLayers((layers) => layers.includes(layer) ? layers.filter((item) => item !== layer) : [...layers, layer]);
   }, []);
 
   const handleSelectHub = useCallback(
-    (hub) => {
+    async (hub) => {
       selectArrivalHub(hub);
+      // Toggle: clicking the same hub again clears the hub→hotels lines
+      const prevKey = selectedTransportHub?._id || selectedTransportHub?.osmId || selectedTransportHub?.name;
+      const hubKey  = hub?._id || hub?.osmId || hub?.name;
+      const isToggleOff = prevKey === hubKey;
+      setSelectedTransportHub(isToggleOff ? null : hub);
+      if (!isToggleOff) {
+        try {
+          const d = await fetchDistances(hub, hotels);
+          setHubToHotelDistances(d || []);
+        } catch (_) {
+          setHubToHotelDistances([]);
+        }
+      } else {
+        setHubToHotelDistances([]);
+      }
     },
-    [selectArrivalHub]
+    [selectArrivalHub, selectedTransportHub, hotels]
   );
 
-  // Determine active route for the map
+  // Resets all map selections back to neutral
+  const handleClearMap = useCallback(() => {
+    selectHotel(null);
+    setInspectedHotel(null);
+    setInspectedAttraction(null);
+    setHotelDistances([]);
+    setSelectedTransportHub(null);
+    setHubToHotelDistances([]);
+    selectArrivalHub(null);
+  }, [selectHotel, selectArrivalHub]);
+
+  // Determine active route for the map (e.g. between arrival terminal and selected hotel)
   const activeRoute = useMemo(() => {
-    // If in planning mode at transport step (Step 3) or final step (Step 5)
-    if (trip.isPlanning && (trip.currentPlanStep === 3 || trip.currentPlanStep === 5)) {
-      if (trip.arrivalHub && trip.selectedHotel) {
-        return {
-          from: [trip.arrivalHub.lat, trip.arrivalHub.lon],
-          to: [trip.selectedHotel.lat, trip.selectedHotel.lon],
-          label: (
-            <>
-              <strong>{trip.arrivalHub.name}</strong> ➔ <strong>{trip.selectedHotel.name}</strong>
-            </>
-          ),
-          distText: trip.selectedHotel.distToArrival ? `${trip.selectedHotel.distToArrival} km` : "",
-        };
-      }
+    const hotel = inspectedHotel || trip.selectedHotel;
+    if (trip.arrivalHub && hotel) {
+      return {
+        from: [trip.arrivalHub.lat, trip.arrivalHub.lon],
+        to: [hotel.lat, hotel.lon],
+        label: <><strong>{trip.arrivalHub.name}</strong> ➔ <strong>{hotel.name}</strong></>,
+        distText: hotel.distToArrival ? `${hotel.distToArrival} km` : "",
+      };
     }
     return null;
-  }, [trip.isPlanning, trip.currentPlanStep, trip.arrivalHub, trip.selectedHotel]);
+  }, [trip.arrivalHub, inspectedHotel, trip.selectedHotel]);
+
+  // Determine transit route (e.g. railway station route when transit layer is active)
+  const transitRoute = useMemo(() => {
+    if (!mapLayers.includes("transport") && !trip.arrivalHub) return null;
+    const railway = trip.arrivalHub || transportHubs.find((h) => h.type === "Railway Station") || transportHubs.find((h) => h.type === "Bus Station");
+    if (!railway) return null;
+    const target = inspectedHotel || trip.selectedHotel || destination;
+    if (!target) return null;
+    // Don't duplicate if already rendered by activeRoute
+    if (trip.arrivalHub && (inspectedHotel || trip.selectedHotel)) return null;
+
+    return {
+      from: [railway.lat, railway.lon],
+      to: [target.lat, target.lon],
+      label: <><strong>{railway.name}</strong> ➔ <strong>{target.name || target.displayName?.split(",")[0] || "City Center"}</strong></>,
+      distText: target.distToArrival ? `${target.distToArrival} km` : "",
+    };
+  }, [mapLayers, trip.arrivalHub, transportHubs, inspectedHotel, trip.selectedHotel, destination]);
 
   const selectedCount = trip.selectedAttractions.length;
 
   // Map Attractions:
   // Once the user has selected tourist spots and proceeds to hotels (step >= 2),
   // stop showing other tourist spots and just show him spots he selected!
-  // When he wants to add more, show all places.
+  // When he goes back to step 1 (or clicks Add More), show all places.
   const mapAttractions = useMemo(() => {
     if (trip.isPlanning && trip.currentPlanStep >= 2 && trip.selectedAttractions.length > 0 && !showAddMorePlaces) {
       return trip.selectedAttractions;
@@ -225,21 +336,37 @@ export default function Destination() {
   }, [trip.isPlanning, trip.currentPlanStep, trip.selectedAttractions, attractions, showAddMorePlaces]);
 
   // Map Hotels:
-  // Once user selects a hotel, don't show other hotels!
-  // If user is currently changing hotel, show all hotels.
+  // In Step 1 (or when user goes back to places), all hotels MUST vanish from map!
+  // In Step >= 2 (or when not planning):
+  // - If a hotel is selected and not changing: only show the selected hotel! All other hotels vanish!
+  // - If no hotel is selected (or user clicked it again to unselect, or is changing): show all hotels!
   const mapHotels = useMemo(() => {
-    if (trip.isPlanning && trip.selectedHotel && !isChangingHotel) {
-      return [trip.selectedHotel];
+    if (trip.isPlanning && trip.currentPlanStep === 1) {
+      return [];
+    }
+    const currentHotel = inspectedHotel || trip.selectedHotel;
+    if (currentHotel && !isChangingHotel) {
+      return [currentHotel];
     }
     return hotels;
-  }, [trip.isPlanning, trip.selectedHotel, isChangingHotel, hotels]);
+  }, [trip.isPlanning, trip.currentPlanStep, inspectedHotel, trip.selectedHotel, isChangingHotel, hotels]);
+
+  // Leave full-trip view whenever the user moves away from the trip summary
+  useEffect(() => {
+    if (!trip.isPlanning || trip.currentPlanStep !== 5) setShowFullTripMap(false);
+  }, [trip.isPlanning, trip.currentPlanStep]);
+
+  const fullTripData = useMemo(() => {
+    if (!showFullTripMap) return null;
+    return { hotel: trip.selectedHotel, attractions: trip.selectedAttractions };
+  }, [showFullTripMap, trip.selectedHotel, trip.selectedAttractions]);
 
   if (status === "loading") {
     return (
       <div className="status-loading-shell">
         <div className="status-spinner" />
         <p className="status-message">
-          Gathering destination sights, accommodations, and transit for <strong>"{query}"</strong>…
+          Finding the best places in <strong>"{query}"</strong>…
         </p>
       </div>
     );
@@ -279,8 +406,24 @@ export default function Destination() {
         </div>
       </div>
 
-      {/* ── Two-Column Persistent Layout ──────────────────────────────────── */}
-      <div className="workspace-columns-layout">
+      {/* ── Destination Weather Report Banner (Open-Meteo) ────────────────── */}
+      <WeatherBanner destination={destination} onWeatherChange={setScreenWeather} />
+
+      {/* ── Main Workspace: Full-Screen Booking Flow OR Two-Column Persistent Layout ── */}
+      {isBooking ? (
+        <div className="booking-flow-workspace-wrapper">
+          <BookingFlow
+            trip={trip}
+            destination={destination}
+            cityName={destination.displayName?.split(",")[0]?.trim() || query}
+            transportHubs={transportHubs}
+            onBack={() => setIsBooking(false)}
+            bookingState={bookingState}
+            setBookingState={setBookingState}
+          />
+        </div>
+      ) : (
+        <div className="workspace-columns-layout">
         {/* Left Column: Persistent Interactive Map */}
         <div className="workspace-map-col">
           {/* Map Layer Controls */}
@@ -289,48 +432,63 @@ export default function Destination() {
             <div className="layer-pill-buttons">
               <button
                 type="button"
-                className={`layer-pill ${mapLayer === "all" ? "active" : ""}`}
-                onClick={() => setMapLayer("all")}
-              >
-                🌐 All
-              </button>
-              <button
-                type="button"
-                className={`layer-pill ${mapLayer === "attractions" ? "active" : ""}`}
-                onClick={() => setMapLayer("attractions")}
+                className={`layer-pill ${mapLayers.includes("attractions") ? "active" : ""}`}
+                onClick={() => toggleMapLayer("attractions")}
               >
                 🏛️ Sights
               </button>
               <button
                 type="button"
-                className={`layer-pill ${mapLayer === "hotels" ? "active" : ""}`}
-                onClick={() => setMapLayer("hotels")}
+                className={`layer-pill ${mapLayers.includes("hotels") ? "active" : ""}`}
+                onClick={() => toggleMapLayer("hotels")}
               >
                 🏨 Hotels
               </button>
               <button
                 type="button"
-                className={`layer-pill ${mapLayer === "transport" ? "active" : ""}`}
-                onClick={() => setMapLayer("transport")}
+                className={`layer-pill ${mapLayers.includes("transport") ? "active" : ""}`}
+                onClick={() => toggleMapLayer("transport")}
               >
                 🚆 Transit
               </button>
             </div>
           </div>
 
+          {showFullTripMap && (
+            <div className="full-trip-map-banner">
+              <div className="full-trip-legend">
+                <strong>🗺️ Full Trip View</strong>
+                <span><i className="legend-line hotel-line" /> Hotel → every sight</span>
+                <span><i className="legend-line sight-line" /> Sight → 2 nearest sights</span>
+              </div>
+              <button type="button" className="full-trip-close-btn" onClick={() => setShowFullTripMap(false)}>
+                ✕ Close
+              </button>
+            </div>
+          )}
+
           <MapView
+            fullTrip={fullTripData}
             center={destination}
             attractions={mapAttractions}
             hotels={mapHotels}
+            allHotels={hotels}
+            allAttractions={attractions}
+            selectedAttractionsList={trip.selectedAttractions}
             transportHubs={transportHubs}
-            activeLayer={mapLayer}
+            activeLayer={mapLayers}
             selectedHotel={inspectedHotel || trip.selectedHotel}
             selectedAttraction={inspectedAttraction}
+            selectedTransportHub={selectedTransportHub}
             arrivalPoint={trip.arrivalHub}
             activeRoute={activeRoute}
+            transitRoute={transitRoute}
+            hotelDistances={hotelDistances}
+            hubToHotelDistances={hubToHotelDistances}
             onSelectHotel={handleSelectHotel}
             onSelectAttraction={handleSelectAttraction}
             onSelectTransportHub={handleSelectHub}
+            onClearMap={handleClearMap}
           />
         </div>
 
@@ -348,10 +506,18 @@ export default function Destination() {
                 setIsPlanning(false);
               }}
               onFocusMap={handleSelectAttraction}
+              onSelectHotel={handleSelectHotel}
               showAddMorePlaces={showAddMorePlaces}
               setShowAddMorePlaces={setShowAddMorePlaces}
               isChangingHotel={isChangingHotel}
               setIsChangingHotel={setIsChangingHotel}
+              onOpenBooking={() => setIsBooking(true)}
+              isFullTripMapOpen={showFullTripMap}
+              onToggleFullTripMap={() => {
+                setShowFullTripMap((v) => !v);
+                document.querySelector(".workspace-map-col")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+              onOpenSunshine={() => setIsSunshineOpen(true)}
             />
           ) : (
             <div className="exploration-tabs-shell">
@@ -380,10 +546,11 @@ export default function Destination() {
                 </button>
                 <button
                   type="button"
-                  className={`tab-nav-btn ${activeTab === "transport" ? "active" : ""}`}
-                  onClick={() => setActiveTab("transport")}
+                  className="tab-sunshine-btn"
+                  onClick={() => setIsSunshineOpen(true)}
+                  title="Ask Sunshine about what's on your screen!"
                 >
-                  Transport
+                  ☀️ Ask Sunshine
                 </button>
               </div>
 
@@ -404,6 +571,7 @@ export default function Destination() {
                     hotelDistances={hotelDistances}
                     onFocusMap={handleSelectAttraction}
                     onStartPlanning={() => setIsPlanning(true)}
+                    focusedAttraction={inspectedAttraction}
                   />
                 )}
 
@@ -414,17 +582,8 @@ export default function Destination() {
                     arrivalHub={trip.arrivalHub}
                     selectedHotel={inspectedHotel || trip.selectedHotel}
                     onSelectHotel={handleSelectHotel}
+                    onFocusMap={handleFocusHotelOnMap}
                     onContinueToTrip={() => setIsPlanning(true)}
-                  />
-                )}
-
-                {activeTab === "transport" && (
-                  <TransportView
-                    destination={destination}
-                    transportHubs={transportHubs}
-                    hotels={hotels}
-                    onSelectHub={handleSelectHub}
-                    onStartPlanning={() => setIsPlanning(true)}
                   />
                 )}
               </div>
@@ -432,6 +591,20 @@ export default function Destination() {
           )}
         </div>
       </div>
+      )}
+
+      <SunshineWorkspaceModal
+        isOpen={isSunshineOpen}
+        onClose={() => setIsSunshineOpen(false)}
+        destination={destination}
+        weather={screenWeather}
+        attractions={attractions}
+        hotels={hotels}
+        transportHubs={transportHubs}
+        onApplyItinerary={() => {
+          setActiveTab("overview");
+        }}
+      />
     </section>
   );
 }

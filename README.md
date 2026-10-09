@@ -46,11 +46,9 @@ Gemini-generated day-by-day AI itinerary.
   auto-persisted state.
 - ✨ **AI trip planner** — generates a full markdown itinerary (day-by-day
   schedule, where to stay, transport advice, local cuisine, practical tips,
-  and a recommended-places checklist) using 's AI API, then parses
+  and a recommended-places checklist) using Google's Gemini API, then parses
   it into an interactive itinerary view that can seed the map/planner
   directly.
-- ⚖️ **Hotel comparison panel** — pin multiple hotels side-by-side by price,
-  rating, and distance.
 - 🌗 **Dark/light theme**, persisted across sessions.
 - 💾 **LocalStorage-backed trip state** so an in-progress plan survives page
   refreshes, plus **MongoDB-backed API caching** so repeat destination
@@ -103,12 +101,11 @@ WanderLust/
         │   ├── MapView.jsx            Leaflet map, markers, road-route polylines
         │   ├── DestinationOverview.jsx
         │   ├── AttractionsList.jsx / AttractionCard.jsx
-        │   ├── HotelsList.jsx / HotelCard.jsx
-        │   ├── TransportView.jsx / TransportHubCard.jsx
-        │   ├── DistanceTable.jsx
-        │   ├── ComparisonPanel.jsx
+        │   ├── HotelsList.jsx
+        │   ├── TransportView.jsx
+│   ├── BookingFlow.jsx / WeatherBanner.jsx
+│   ├── SunshineHomeModal.jsx / SunshineWorkspaceModal.jsx
         │   ├── TripPlannerFlow.jsx    5-step guided trip planner (in-page)
-        │   ├── TripPlannerWizard.jsx  Alternate/legacy standalone wizard flow
         │   ├── AiTripModal.jsx        AI trip-generation form/modal
         │   └── AiItineraryView.jsx    Renders parsed AI itinerary, day tabs
         ├── utils/
@@ -146,19 +143,17 @@ WanderLust/
 5. Selecting a hotel calls `POST /api/distance` to compute the **haversine
    distance** from that hotel to every attraction, shown in a distance table
    and on each attraction card.
-6. **"Add to comparison"** lets the user pin several hotels side-by-side
-   (price, rating, distance) via `ComparisonPanel`.
-7. The **5-step Trip Planner** (`TripPlannerFlow`) walks the user through:
+6. The **5-step Trip Planner** (`TripPlannerFlow`) walks the user through:
    Sights → Hotel → Arrival mode/terminal → Local cab type → Final review,
    computing a running cost estimate and persisting progress to
    `localStorage` via `TripContext`.
-8. The **AI Plan** button opens `AiTripModal`, which calls
+7. The **AI Plan** button opens `AiTripModal`, which calls
    `POST /api/ai/plan-trip` (AI) to generate a full markdown itinerary —
    parsed by `itineraryParser.js` into day-by-day cards, "where to stay",
    transport advice, local cuisine, tips, and a recommended-places checklist
    — with a "Build Trip on Map" action to seed the guided planner from the
    AI's picks.
-9. Every hotel has a **Book Now** button pointing at a mock booking URL,
+8. Every hotel has a **Book Now** button pointing at a mock booking URL,
    structured so a real booking API/deep link can replace it without
    touching the UI.
 
@@ -168,14 +163,14 @@ WanderLust/
 
 - Node.js (v18+ recommended)
 - MongoDB running locally, or a MongoDB Atlas connection string
-- A [ AI API key](https://ai..dev/) (required — the backend
-  throws on startup without `AI_API_KEY`)
+- A [Google Gemini API key](https://aistudio.google.com/apikey) (required — the backend
+  throws on startup without `GEMINI_API_KEY`)
 
 ### 1. Backend
 
 ```bash
 cd backend
-cp .env.example .env      # fill in MONGO_URI, AI_API_KEY, etc.
+cp .env.example .env      # fill in MONGO_URI, GEMINI_API_KEY, etc.
 npm install
 npm run dev                # nodemon, http://localhost:5000
 ```
@@ -214,7 +209,8 @@ npm run preview   # serve the production build locally
 | `OVERPASS_BASE_URL`       | Overpass API endpoint for POI queries                                | `https://overpass-api.de/api/interpreter` |
 | `OSRM_BASE_URL`           | OSRM routing server (documented seam for future road-distance calls) | `https://router.project-osrm.org` |
 | `NOMINATIM_USER_AGENT`    | Contact email/app name — **required** by Nominatim/Overpass usage policy | `travel-planner-prototype (you@example.com)` |
-| `AI_API_KEY`          |  AI API key — **required**, server throws on startup without it | *(none — must be set)*         |
+| `GEMINI_API_KEY`      | Google Gemini API key — **required**, server throws on startup without it | *(none — must be set)* |
+| `GEMINI_MODEL`        | Optional Gemini model override | `gemini-3.1-flash-lite` |
 
 > ⚠️ **Never commit your `.env` file.** `.gitignore` already excludes it —
 > use `.env.example` as the template and keep real keys out of source
@@ -276,10 +272,6 @@ cache lookups):
 - **`itineraryParser.js`** turns the AI's markdown response into a
   structured object (`title`, `summary`, `days[]`, `whereToStay`,
   `transport`, `cuisine`, `tips`) for `AiItineraryView`'s tabbed rendering.
-- **`TripPlannerWizard.jsx`** exists alongside `TripPlannerFlow.jsx` as an
-  alternate/standalone planner flow with its own arrival and cab-type
-  options — check current usage in `App.jsx`/`Destination.jsx` if
-  consolidating the two.
 
 ## Extending the App
 
@@ -298,9 +290,7 @@ consuming code:
 - **User accounts / saved trips / itinerary persistence** → new Mongoose
   models + routes; the frontend already isolates all network calls in
   `src/api/api.js`.
-- **Swap the AI model/provider** → `MODEL_NAME` in
-  `backend/routes/ai.js`/`attractions.js` is a single constant
-  (`AI-3.1-flash-lite`).
+- **Swap the AI model/provider** → set `GEMINI_MODEL` in `backend/.env` (default `gemini-3.1-flash-lite`).
 
 ## Attribution
 
@@ -308,4 +298,4 @@ Map tiles and location data: © OpenStreetMap contributors, used under the
 Nominatim and Overpass usage policies. Set `NOMINATIM_USER_AGENT` in
 `backend/.env` to identify your app per Nominatim's usage policy. Road-route
 geometry from the public OSRM demo server. Curated attraction lists and AI
-itineraries generated by  AI.
+itineraries generated by Google Gemini.

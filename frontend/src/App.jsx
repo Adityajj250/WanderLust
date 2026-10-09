@@ -28,20 +28,7 @@ class ErrorBoundary extends React.Component {
 
 
 function AppHeader() {
-  const { trip, openAiModal, setIsPlanning, theme, toggleTheme } = useTrip();
-  const navigate = useNavigate();
-
-  function handleMyTripClick() {
-    if (trip.destination?.query) {
-      setIsPlanning(true);
-      navigate(`/destination/${encodeURIComponent(trip.destination.query)}`);
-    } else {
-      // Default to exploring or start with a sample place
-      navigate("/");
-    }
-  }
-
-  const tripPlacesCount = trip.selectedAttractions?.length || 0;
+  const { theme, toggleTheme } = useTrip();
 
   return (
     <header className="app-header">
@@ -53,28 +40,6 @@ function AppHeader() {
       </div>
 
       <nav className="global-nav">
-        <Link to="/" className="nav-item">
-          Explore
-        </Link>
-
-        <button
-          type="button"
-          className={`nav-item nav-btn-trip ${tripPlacesCount > 0 ? "has-items" : ""}`}
-          onClick={handleMyTripClick}
-          title="View your active trip plan"
-        >
-          My Trip
-          {tripPlacesCount > 0 && <span className="nav-badge">{tripPlacesCount}</span>}
-        </button>
-
-        <button
-          type="button"
-          className="nav-item nav-btn-ai"
-          onClick={() => openAiModal(trip.destination?.query || "")}
-        >
-          ✨ AI Plan
-        </button>
-
         <button
           type="button"
           className="nav-item nav-btn-theme"
@@ -119,9 +84,11 @@ function MainContent() {
 
 export default function App() {
   return (
-    <TripProvider>
-      <MainContent />
-    </TripProvider>
+    <ErrorBoundary>
+      <TripProvider>
+        <MainContent />
+      </TripProvider>
+    </ErrorBoundary>
   );
 }
 

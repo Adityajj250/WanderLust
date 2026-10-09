@@ -110,6 +110,7 @@ export default function TransportView({
               <span className="mode-icon">{mode.icon}</span>
               <span className="mode-name">{mode.label}</span>
               <span className="mode-desc">{mode.desc}</span>
+              {isSelected && <span className="mode-selected-pill">Selected ✓</span>}
             </button>
           );
         })}

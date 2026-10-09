@@ -1,13 +1,6 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useTrip } from "../context/TripContext.jsx";
 import { computeHotelLocationScores } from "../utils/locationScore.js";
-
-const PRICE_FILTERS = [
-  { id: "all", label: "All Rates" },
-  { id: "budget", label: "Budget (< ₹2.5k)", max: 2500 },
-  { id: "moderate", label: "Moderate (₹2.5k–₹4.5k)", min: 2500, max: 4500 },
-  { id: "luxury", label: "Luxury (> ₹4.5k)", min: 4500 },
-];
 
 export default function HotelsList({
   hotels = [],
@@ -15,11 +8,26 @@ export default function HotelsList({
   arrivalHub = null,
   selectedHotel = null,
   onSelectHotel,
+  onFocusMap,
   onContinueToTrip,
 }) {
-  const [priceFilter, setPriceFilter] = useState("all");
+  const [priceSort, setPriceSort] = useState("low");
+  const [priceMax, setPriceMax] = useState("all");
   const [expandedHotelKey, setExpandedHotelKey] = useState(null);
   const { trip, selectHotel } = useTrip();
+  const listRef = useRef(null);
+
+  // Scroll to the selected hotel card whenever selectedHotel changes
+  useEffect(() => {
+    if (!selectedHotel) return;
+    const key = selectedHotel._id || selectedHotel.osmId || selectedHotel.name;
+    // Brief timeout lets React finish rendering the card (it may have just appeared)
+    const t = setTimeout(() => {
+      const el = document.getElementById(`hotel-card-${key}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+    return () => clearTimeout(t);
+  }, [selectedHotel]);
 
   // Target attractions: use trip selected attractions if user added any, else default to top 4 iconic attractions
   const targetAttractions = useMemo(() => {
@@ -31,20 +39,38 @@ export default function HotelsList({
     return computeHotelLocationScores(hotels, targetAttractions, arrivalHub || trip.arrivalHub);
   }, [hotels, targetAttractions, arrivalHub, trip.arrivalHub]);
 
-  // Apply price filter
+  // Price-wise filter and sorting
   const filteredHotels = useMemo(() => {
-    return scoredHotels.filter((h) => {
+    let list = scoredHotels.filter((h) => {
       const p = h.pricePerNight || 0;
-      if (priceFilter === "budget") return p < 2500;
-      if (priceFilter === "moderate") return p >= 2500 && p <= 4500;
-      if (priceFilter === "luxury") return p > 4500;
+      if (priceMax === "2500") return p <= 2500;
+      if (priceMax === "4000") return p <= 4000;
+      if (priceMax === "6000") return p <= 6000;
       return true;
     });
-  }, [scoredHotels, priceFilter]);
+
+    return list.sort((a, b) => {
+      if (priceSort === "low") return (a.pricePerNight || 0) - (b.pricePerNight || 0);
+      if (priceSort === "high") return (b.pricePerNight || 0) - (a.pricePerNight || 0);
+      if (priceSort === "rating") return (b.rating || 0) - (a.rating || 0);
+      return (b.locationScore || 0) - (a.locationScore || 0);
+    });
+  }, [scoredHotels, priceMax, priceSort]);
 
   const [showAllHotels, setShowAllHotels] = useState(false);
 
+  const activeTripHotelKey =
+    trip.selectedHotel?._id || trip.selectedHotel?.osmId || trip.selectedHotel?.name;
+
   function handleChooseHotel(hotel) {
+    const hotelKey = hotel._id || hotel.osmId || hotel.name;
+    // If user clicks the already selected hotel, unselect it and restore all hotels
+    if (activeTripHotelKey === hotelKey) {
+      selectHotel(null);
+      setShowAllHotels(true);
+      if (onSelectHotel) onSelectHotel(null);
+      return;
+    }
     selectHotel(hotel);
     setShowAllHotels(false);
     if (onSelectHotel) onSelectHotel(hotel);
@@ -53,9 +79,6 @@ export default function HotelsList({
   function toggleDistanceBreakdown(hotelKey) {
     setExpandedHotelKey((prev) => (prev === hotelKey ? null : hotelKey));
   }
-
-  const activeTripHotelKey =
-    trip.selectedHotel?._id || trip.selectedHotel?.osmId || trip.selectedHotel?.name;
 
   const displayedHotels = useMemo(() => {
     if (trip.selectedHotel && !showAllHotels) {
@@ -83,7 +106,7 @@ export default function HotelsList({
       {trip.selectedHotel && !showAllHotels ? (
         <div className="selected-hotel-banner" style={{ marginBottom: "16px" }}>
           <div className="selected-hotel-banner-title">
-            <span className="hotel-banner-icon">🏨</span>
+            <span className="hotel-banner-icon">{trip.selectedHotel.icon || "🏨"}</span>
             <div>
               <strong>Your Selected Hotel</strong>
               <span className="hotel-banner-sub">Other hotels are hidden</span>
@@ -98,18 +121,40 @@ export default function HotelsList({
           </button>
         </div>
       ) : (
-        /* Budget Filter Chips */
-        <div className="category-filter-chips">
-          {PRICE_FILTERS.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              className={`filter-chip ${priceFilter === f.id ? "active" : ""}`}
-              onClick={() => setPriceFilter(f.id)}
+        <div className="hotel-filters-toolbar">
+          <div className="hotel-filter-pills">
+            <span className="filter-label">Max Price:</span>
+            {[
+              { id: "all", label: "All Prices" },
+              { id: "2500", label: "Under ₹2,500" },
+              { id: "4000", label: "Under ₹4,000" },
+              { id: "6000", label: "Under ₹6,000" },
+            ].map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={`filter-chip ${priceMax === f.id ? "active" : ""}`}
+                onClick={() => setPriceMax(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="hotel-sort-wrap">
+            <span className="filter-label">Sort:</span>
+            <select
+              className="hotel-sort-select"
+              value={priceSort}
+              onChange={(e) => setPriceSort(e.target.value)}
             >
-              {f.label}
-            </button>
-          ))}
+              <option value="low">💰 Price: Low to High</option>
+              <option value="high">💎 Price: High to Low</option>
+              <option value="rating">⭐ Top Rated</option>
+              <option value="score">📍 Best Location</option>
+            </select>
+          </div>
+
           {trip.selectedHotel && showAllHotels && (
             <button
               type="button"
@@ -134,6 +179,7 @@ export default function HotelsList({
           return (
             <div
               key={hotelKey}
+              id={`hotel-card-${hotelKey}`}
               className={`hotel-score-card ${isSelected ? "selected" : ""} ${
                 h.badge ? `badge-${h.badge.type}` : ""
               }`}
@@ -141,7 +187,10 @@ export default function HotelsList({
               <div className="hotel-top-row">
                 <div className="hotel-main-details">
                   <div className="hotel-header-line">
-                    <h4>{h.name}</h4>
+                    <h4>
+                      <span className="hotel-card-icon" style={{ marginRight: "6px" }}>{h.icon || "🏨"}</span>
+                      {h.name}
+                    </h4>
                     {h.badge && <span className={`rank-badge ${h.badge.type}`}>{h.badge.label}</span>}
                   </div>
 
@@ -209,6 +258,27 @@ export default function HotelsList({
 
               {/* Card Actions */}
               <div className="hotel-card-actions">
+                <a
+                  className="know-more-btn hotel-know-more-btn"
+                  href={`https://www.google.com/search?q=${encodeURIComponent(`${h.name} ${trip.destination?.displayName?.split(",")[0] || trip.destination?.query || ""} hotel reviews photos`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Search reviews and photos on Google"
+                >
+                  🔍 Know more
+                </a>
+
+                {onFocusMap && (
+                  <button
+                    type="button"
+                    className="map-focus-btn secondary small"
+                    onClick={() => onFocusMap(h)}
+                    title="Highlight on map and show routes to attractions"
+                  >
+                    📍 Map
+                  </button>
+                )}
+
                 <button
                   type="button"
                   className="secondary small breakdown-btn"

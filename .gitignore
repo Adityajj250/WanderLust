@@ -1,4 +1,25 @@
+# Dependencies
 node_modules/
-.env
+
+# Build output
 dist/
+build/
+
+# Environment (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Logs
 *.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large media / scratch
+*.mp4
+scratch_edge/

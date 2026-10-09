@@ -4,10 +4,12 @@ export default function AttractionCard({
   attraction,
   distanceKm,
   isInTrip = false,
+  isFocused = false,
   onToggleTrip,
   onFocusMap,
 }) {
-  const isPopular = (attraction.score || 0) >= 25;
+  const isMustVisit = attraction.priority === "must_visit";
+  const isPopular = isMustVisit || (attraction.score || 0) >= 25;
   const hasWikipedia = !!attraction.wikipedia;
 
   // Calculate synthetic rating (e.g. 4.3 - 4.9) based on popularity score
@@ -22,16 +24,23 @@ export default function AttractionCard({
   const entryPrice = isFree ? "Free Entry" : `₹${Math.round(50 + ((attraction.score || 15) % 4) * 50)}`;
 
   return (
-    <div className={`card attraction-card ${isInTrip ? "in-trip" : ""} ${isPopular ? "attraction-popular" : ""}`}>
+    <div className={`card attraction-card ${isInTrip ? "in-trip" : ""} ${isFocused ? "map-focused" : ""} ${isMustVisit ? "attraction-must-visit" : isPopular ? "attraction-popular" : ""}`}>
       {attraction.imageUrl && (
         <div className="card-image-wrap">
           <img src={attraction.imageUrl} alt={attraction.name} className="card-image" loading="lazy" />
-          {isPopular && <span className="popular-badge">⭐ Top Pick</span>}
+          {isMustVisit ? (
+            <span className="popular-badge must-visit-badge">⭐ Must-Visit</span>
+          ) : isPopular ? (
+            <span className="popular-badge">🔥 Hot Pick</span>
+          ) : null}
         </div>
       )}
       <div className="card-body">
         <div className="card-title-row">
-          <h4>{attraction.name}</h4>
+          <h4>
+            <span className="sight-card-icon" style={{ marginRight: "6px" }}>{attraction.icon || "🏛️"}</span>
+            {attraction.name}
+          </h4>
           <span className="badge category-badge">{attraction.category}</span>
         </div>
 
@@ -44,6 +53,13 @@ export default function AttractionCard({
             <span className="distance-pill">🚗 {distanceKm} km</span>
           )}
         </div>
+
+        {attraction.curationReason && (
+          <div className="curation-reason-quote">
+            <span className="curation-icon">💡</span>
+            <span className="curation-text">{attraction.curationReason}</span>
+          </div>
+        )}
 
         <p className="card-description">{attraction.description}</p>
 
@@ -72,6 +88,16 @@ export default function AttractionCard({
             </button>
           )}
 
+          <a
+            className="secondary small attraction-more-link know-more-btn"
+            href={`https://www.google.com/search?q=${encodeURIComponent(`${attraction.name} ${attraction.category || ""} reviews images`)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Search photos, reviews & details on Google"
+          >
+            🔍 Know more
+          </a>
+
           <button
             type="button"
             className={`trip-toggle-btn ${isInTrip ? "added" : "primary"}`}
@@ -84,4 +110,3 @@ export default function AttractionCard({
     </div>
   );
 }
-

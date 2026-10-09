@@ -1,5 +1,4 @@
 import React, { useMemo } from "react";
-import { useTrip } from "../context/TripContext.jsx";
 
 export default function DestinationOverview({
   destination,
@@ -7,7 +6,6 @@ export default function DestinationOverview({
   onExploreAttractions,
   onStartPlanning,
 }) {
-  const { openAiModal } = useTrip();
 
   // Extract concise city and region/country
   const { cityName, regionCountry } = useMemo(() => {
@@ -96,21 +94,13 @@ export default function DestinationOverview({
         </div>
       )}
 
-      <div className="overview-actions-row">
+      <div className="overview-actions-row overview-actions-right">
         <button
           type="button"
           className="primary overview-explore-btn"
           onClick={onExploreAttractions}
         >
           Explore Attractions ➔
-        </button>
-
-        <button
-          type="button"
-          className="secondary overview-ai-btn"
-          onClick={() => openAiModal(destination?.query || cityName)}
-        >
-          ✨ Plan with AI
         </button>
       </div>
     </div>

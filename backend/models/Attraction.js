@@ -14,10 +14,15 @@ const AttractionSchema = new mongoose.Schema(
     lat: { type: Number, required: true },
     lon: { type: Number, required: true },
     imageUrl: { type: String, default: "" },
-    source: { type: String, enum: ["overpass", "mock"], default: "mock" },
-    osmId: { type: String },
-    score: { type: Number, default: 0, index: true }, // popularity score: higher = more famous/popular
+    source: { type: String, default: "osm+gemini" },
+    osmId: { type: String, index: true },
+    osmType: { type: String, default: "node" },
+    priority: { type: String, default: "recommended" }, // "must_visit" | "recommended" | "regular"
+    curationReason: { type: String, default: "" },
+    score: { type: Number, default: 0, index: true },
     wikipedia: { type: String, default: null },
+    wikidata: { type: String, default: null },
+    icon: { type: String, default: "🏛️" },
   },
   { timestamps: true }
 );
